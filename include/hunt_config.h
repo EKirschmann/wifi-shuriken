@@ -34,9 +34,12 @@
 #define HUNT_CONFIG_PATH "/hunt.txt"
 #endif
 
-// Generous for a handful of key=value lines, small enough to sit on the stack.
-#ifndef HUNT_CONFIG_MAX_BYTES
-#define HUNT_CONFIG_MAX_BYTES 512
+// Longest single line handled. The file is read a line at a time rather than
+// slurped into one buffer: a documented config easily runs past a kilobyte of
+// comments with the actual settings at the bottom, and a whole-file buffer
+// would silently parse only the header and report "no usable settings".
+#ifndef HUNT_CONFIG_MAX_LINE
+#define HUNT_CONFIG_MAX_LINE 192
 #endif
 
 enum HuntBandSelect : uint8_t {

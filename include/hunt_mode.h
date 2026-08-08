@@ -46,6 +46,14 @@
 #define HUNT_LIVE_PRINT 1
 #endif
 
+// Re-print the hunt configuration this often. The USB console drops writes
+// until a host attaches, so boot-time output is lost whenever the device is
+// powered before the terminal is opened -- which is the normal case. Without a
+// repeat there is no way to see what the device is actually hunting. 0 disables.
+#ifndef HUNT_ANNOUNCE_INTERVAL_MS
+#define HUNT_ANNOUNCE_INTERVAL_MS 30000
+#endif
+
 // Print a "no contact" heartbeat when the target has been silent this long.
 // The hard AP foxes sleep 45s between 30s transmit windows, so silence is
 // normal and worth distinguishing from "walked out of range". 0 disables.

@@ -158,6 +158,7 @@ static void scannerSerialPrintfTry(const char* fmt, ...) {
 // the scanner runtime state.
 static HuntTarget hunt_target = {};
 static HuntTargetState hunt_state = {};
+static uint32_t hunt_next_announce_ms = 0;
 
 // Applies overrides parsed from the SD card on core0. Only hunt builds consult
 // the file: a wardriving build must not silently narrow its sweep because a
@@ -283,6 +284,20 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
   (void)gap_ms;
   (void)first;
   (void)prev_rssi;
+#endif
+}
+
+// Boot-time output is lost whenever the device powers up before a terminal is
+// attached, so repeat the configuration periodically. Attaching at any moment
+// then tells you what is being hunted within one interval.
+static void huntServicePeriodicAnnounce() {
+#if HUNT_ANNOUNCE_INTERVAL_MS > 0
+  const uint32_t now = millis();
+  if ((int32_t)(now - hunt_next_announce_ms) < 0) {
+    return;
+  }
+  hunt_next_announce_ms = now + (uint32_t)HUNT_ANNOUNCE_INTERVAL_MS;
+  huntAnnounceConfig();
 #endif
 }
 
@@ -1601,6 +1616,7 @@ void controllerScannerRuntimeRun(const ControllerScannerRuntimeContext& context)
   hunt_target = huntTargetFromConfig();
   huntApplySdConfig();
   huntAnnounceConfig();
+  hunt_next_announce_ms = millis() + (uint32_t)HUNT_ANNOUNCE_INTERVAL_MS;
 #endif
 #if SCANNER_USE_SHIFTREG_CS
   for (uint8_t s = 0; s < SCANNER_SLOT_COUNT; s++) {
@@ -1619,6 +1635,7 @@ void controllerScannerRuntimeRun(const ControllerScannerRuntimeContext& context)
     }
     handlePendingDedupeResetRequest();
 #if HUNT_MODE_ENABLED
+    huntServicePeriodicAnnounce();
     huntServiceIdleNotice();
 #endif
     // Each iteration services exactly one slot; round-robin when shift-reg CS is enabled.

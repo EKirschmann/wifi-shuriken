@@ -1,7 +1,12 @@
-# WiFi-Shuriken hunt target
-#
-# Copy this file to the ROOT of the SD card as "hunt.txt" and power-cycle.
-# It is read once at boot, before scanning starts.
+# WiFi-Shuriken hunt target. Copy to the SD card root as "hunt.txt".
+# Settings first so they are the first thing you see and edit.
+
+bssid = F2:2F:E4:6B:D2:9E
+ssid  =
+band  = 5
+
+# ---------------------------------------------------------------------------
+# Read once at boot, before scanning starts. Power-cycle after editing.
 #
 # Only hunt_* firmware builds read this file. A wardriving build ignores it
 # entirely, so a stale hunt.txt cannot quietly narrow a mapping run.
@@ -18,13 +23,14 @@
 #           If both are set, BOTH must match.
 #
 #   band    2.4 | 5 | all | default
-#           2.4      channels 1-11 only        (~1.2s sweep, 1 scanner)
-#           5        the 9 non-DFS fox chans   (~1.0s sweep, 1 scanner)
-#           all      full dual-band coverage   (~6.0s sweep, 1 scanner)
+#           2.4      channels 1-11 only
+#           5        the 9 non-DFS fox channels
+#           all      full dual-band coverage
 #           default  keep whatever the firmware was built with
 #
-# Anything unparseable is reported on the console at boot and the built-in
-# value is kept -- it never silently hunts nothing.
+# Anything unparseable is reported on the console and the built-in value is
+# kept -- it never silently hunts nothing. The configuration is re-printed
+# every 30s, so attaching a terminal at any time shows the live target.
 #
 # RF Village 2026 targets:
 #   YT WiFi AP Hard Fox          F2:22:28:43:1E:7C   band = 2.4
@@ -32,7 +38,3 @@
 #   Mr Lee WiFi Client Hard Fox  F2:0D:18:39:70:D3   NOT findable by this
 #     firmware. It is a station, not an AP -- it never beacons, and the
 #     scanners use a normal network scan rather than monitor mode.
-
-bssid = F2:2F:E4:6B:D2:9E
-ssid  =
-band  = 5

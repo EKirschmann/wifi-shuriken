@@ -355,24 +355,49 @@ static void loadHuntConfigFromSd(bool sd_ready) {
     return;
   }
 
-  char text[HUNT_CONFIG_MAX_BYTES] = {};
-  const uint32_t file_size = static_cast<uint32_t>(config_file.size());
-  const int bytes_read =
-      config_file.read(reinterpret_cast<uint8_t*>(text), sizeof(text) - 1);
+  // Read a line at a time. A documented config runs well past a kilobyte of
+  // comment header with the settings at the bottom, so buffering a fixed prefix
+  // of the file would parse only comments and look like an empty config.
+  char line[HUNT_CONFIG_MAX_LINE];
+  size_t line_len = 0;
+  uint32_t total_bytes = 0;
+  uint32_t long_lines = 0;
+
+  while (true) {
+    const int c = config_file.read();
+    if (c < 0) {
+      break;
+    }
+    total_bytes++;
+    if (c == '\n') {
+      huntConfigParseLine(line, 0, line_len, hunt_config);
+      line_len = 0;
+      continue;
+    }
+    if (line_len < sizeof(line)) {
+      line[line_len++] = static_cast<char>(c);
+    } else if (line_len == sizeof(line)) {
+      line_len++;  // counted once; the remainder of this line is discarded
+      long_lines++;
+    }
+  }
+  if (line_len > 0) {
+    huntConfigParseLine(line, 0,
+                        line_len > sizeof(line) ? sizeof(line) : line_len,
+                        hunt_config);
+  }
   config_file.close();
 
-  if (bytes_read <= 0) {
+  if (total_bytes == 0) {
     Serial.println("Hunt config is empty; using built-in hunt target");
     return;
   }
-  text[bytes_read] = '\0';
-
-  if (file_size > static_cast<uint32_t>(sizeof(text) - 1)) {
-    serialPrintfNormalized("Hunt config truncated to %u of %lu bytes\n",
-                           (unsigned)bytes_read, (unsigned long)file_size);
+  if (long_lines > 0) {
+    serialPrintfNormalized("Hunt config: %lu line(s) longer than %u chars were truncated\n",
+                           (unsigned long)long_lines, (unsigned)HUNT_CONFIG_MAX_LINE);
   }
 
-  if (!huntConfigParseText(text, static_cast<size_t>(bytes_read), hunt_config)) {
+  if (hunt_config.keys_ok == 0) {
     serialPrintfNormalized("Hunt config had no usable settings (%u unreadable line(s)); using built-in target\n",
                            (unsigned)hunt_config.keys_bad);
     huntConfigInit(hunt_config);
