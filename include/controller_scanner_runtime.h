@@ -7,6 +7,7 @@
 class Adafruit_NeoPixel;
 
 #include "pico/util/queue.h"
+#include "hunt_config.h"
 #include "wifi_dedupe.h"
 
 // Cross-core resources owned by controller_main.cpp and consumed by the
@@ -27,6 +28,9 @@ struct ControllerScannerRuntimeContext {
   // Watchdog heartbeat: core1 writes the current time (ms) each main loop
   // iteration so core0 can verify both cores are alive before kicking.
   volatile uint32_t* wd_core1_last_ms;
+  // Optional hunt overrides parsed from the SD card on core0 before core1
+  // starts. Null means "use the values this firmware was built with".
+  const HuntConfig* hunt_config;
 };
 
 // Initialize the SPI1 bus and any scanner CS hardware.

@@ -1,0 +1,201 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <unity.h>
+
+#include "hunt_config.h"
+
+void setUp() {}
+void tearDown() {}
+
+static const uint8_t FOX_5G[6] = {0xF2, 0x2F, 0xE4, 0x6B, 0xD2, 0x9E};
+
+static bool parse(const char* text, HuntConfig& cfg) {
+  return huntConfigParseText(text, strlen(text), cfg);
+}
+
+void test_parses_a_typical_config_file() {
+  HuntConfig cfg = {};
+  const char* text =
+      "# WiFi-Shuriken hunt target\n"
+      "bssid = F2:2F:E4:6B:D2:9E\n"
+      "band  = 5\n";
+
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_TRUE(cfg.has_bssid);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_5GHZ, cfg.band);
+  TEST_ASSERT_EQUAL_UINT16(2, cfg.keys_ok);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+}
+
+void test_tolerates_crlf_blank_lines_and_comment_styles() {
+  HuntConfig cfg = {};
+  const char* text =
+      "\r\n"
+      "# hash comment\r\n"
+      "; semicolon comment\r\n"
+      "   \r\n"
+      "\tbssid\t=\tF2:2F:E4:6B:D2:9E\t\r\n"
+      "band = 5 # trailing comment\r\n";
+
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_TRUE(cfg.has_bssid);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_5GHZ, cfg.band);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+}
+
+void test_keys_and_band_values_are_case_insensitive() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("BSSID=f2:2f:e4:6b:d2:9e\nBAND=ALL\n", cfg));
+  TEST_ASSERT_TRUE(cfg.has_bssid);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_ALL, cfg.band);
+}
+
+void test_band_aliases() {
+  struct Case { const char* value; uint8_t expected; };
+  const Case cases[] = {
+    {"2.4", HUNT_BAND_24GHZ}, {"24", HUNT_BAND_24GHZ}, {"2", HUNT_BAND_24GHZ},
+    {"2.4GHz", HUNT_BAND_24GHZ}, {"2g", HUNT_BAND_24GHZ},
+    {"5", HUNT_BAND_5GHZ}, {"5g", HUNT_BAND_5GHZ}, {"5GHZ", HUNT_BAND_5GHZ},
+    {"all", HUNT_BAND_ALL}, {"both", HUNT_BAND_ALL}, {"full", HUNT_BAND_ALL},
+    {"default", HUNT_BAND_KEEP_DEFAULT}, {"auto", HUNT_BAND_KEEP_DEFAULT},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    char line[64] = {};
+    snprintf(line, sizeof(line), "band = %s\n", cases[i].value);
+    HuntConfig cfg = {};
+    TEST_ASSERT_TRUE(parse(line, cfg));
+    TEST_ASSERT_EQUAL_UINT8(cases[i].expected, cfg.band);
+    TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+  }
+}
+
+void test_bssid_aliases_and_separator_forms() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("mac = f2-2f-e4-6b-d2-9e\n", cfg));
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+
+  HuntConfig bare = {};
+  TEST_ASSERT_TRUE(parse("target = F22FE46BD29E\n", bare));
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, bare.bssid, 6);
+}
+
+void test_ssid_is_captured_verbatim_including_spaces() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("ssid = Lagos WiFi 5GHz AP Hard Fox\n", cfg));
+  TEST_ASSERT_TRUE(cfg.ssid_seen);
+  TEST_ASSERT_TRUE(cfg.has_ssid);
+  TEST_ASSERT_EQUAL_STRING("Lagos WiFi 5GHz AP Hard Fox", cfg.ssid);
+}
+
+// A blank value must be distinguishable from an absent key, otherwise there is
+// no way to clear a filter that the firmware was built with.
+void test_blank_values_clear_rather_than_error() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("bssid =\nssid =\n", cfg));
+  TEST_ASSERT_TRUE(cfg.bssid_seen);
+  TEST_ASSERT_FALSE(cfg.has_bssid);
+  TEST_ASSERT_TRUE(cfg.ssid_seen);
+  TEST_ASSERT_FALSE(cfg.has_ssid);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+
+  HuntConfig absent = {};
+  TEST_ASSERT_TRUE(parse("band = 5\n", absent));
+  TEST_ASSERT_FALSE(absent.bssid_seen);
+  TEST_ASSERT_FALSE(absent.ssid_seen);
+}
+
+void test_malformed_entries_are_counted_but_do_not_abort_the_file() {
+  HuntConfig cfg = {};
+  const char* text =
+      "this line has no equals sign\n"
+      "bssid = ZZ:ZZ:ZZ:ZZ:ZZ:ZZ\n"
+      "unknown_key = 5\n"
+      "band = purple\n"
+      "ssid = Hard Fox\n";
+
+  // The good line still lands.
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_TRUE(cfg.has_ssid);
+  TEST_ASSERT_EQUAL_STRING("Hard Fox", cfg.ssid);
+  // A bad BSSID must not be treated as a target.
+  TEST_ASSERT_FALSE(cfg.has_bssid);
+  TEST_ASSERT_EQUAL_UINT16(1, cfg.keys_ok);
+  TEST_ASSERT_EQUAL_UINT16(4, cfg.keys_bad);
+}
+
+void test_file_with_nothing_usable_reports_failure() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_FALSE(parse("# only a comment\n\n   \n", cfg));
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_ok);
+
+  HuntConfig noise = {};
+  TEST_ASSERT_FALSE(parse("garbage\nmore garbage\n", noise));
+  TEST_ASSERT_EQUAL_UINT16(2, noise.keys_bad);
+
+  HuntConfig empty = {};
+  TEST_ASSERT_FALSE(parse("", empty));
+}
+
+void test_final_line_without_newline_is_parsed() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("band = 2.4", cfg));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_24GHZ, cfg.band);
+}
+
+void test_overlong_ssid_is_truncated_not_overflowed() {
+  HuntConfig cfg = {};
+  char line[128] = {};
+  snprintf(line, sizeof(line),
+           "ssid = 0123456789012345678901234567890123456789\n");
+  TEST_ASSERT_TRUE(parse(line, cfg));
+  TEST_ASSERT_TRUE(cfg.has_ssid);
+  TEST_ASSERT_EQUAL_UINT32(32, strlen(cfg.ssid));
+}
+
+void test_band_maps_onto_the_expected_sweep_plan() {
+  HuntConfig cfg = {};
+  cfg.band = HUNT_BAND_5GHZ;
+  ChannelPlan plan = huntConfigChannelPlan(cfg);
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_5_GHZ));
+  TEST_ASSERT_FALSE(channelPlanUsesBand(plan, WIFI_BAND_24_GHZ));
+  TEST_ASSERT_EQUAL_UINT32(9, plan.count_5g);
+
+  cfg.band = HUNT_BAND_24GHZ;
+  plan = huntConfigChannelPlan(cfg);
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_24_GHZ));
+  TEST_ASSERT_FALSE(channelPlanUsesBand(plan, WIFI_BAND_5_GHZ));
+  TEST_ASSERT_EQUAL_UINT32(11, plan.count_24g);
+
+  cfg.band = HUNT_BAND_ALL;
+  plan = huntConfigChannelPlan(cfg);
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_24_GHZ));
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_5_GHZ));
+  TEST_ASSERT_EQUAL_UINT32(14, plan.count_24g);
+  TEST_ASSERT_EQUAL_UINT32(25, plan.count_5g);
+}
+
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+
+  UNITY_BEGIN();
+  RUN_TEST(test_parses_a_typical_config_file);
+  RUN_TEST(test_tolerates_crlf_blank_lines_and_comment_styles);
+  RUN_TEST(test_keys_and_band_values_are_case_insensitive);
+  RUN_TEST(test_band_aliases);
+  RUN_TEST(test_bssid_aliases_and_separator_forms);
+  RUN_TEST(test_ssid_is_captured_verbatim_including_spaces);
+  RUN_TEST(test_blank_values_clear_rather_than_error);
+  RUN_TEST(test_malformed_entries_are_counted_but_do_not_abort_the_file);
+  RUN_TEST(test_file_with_nothing_usable_reports_failure);
+  RUN_TEST(test_final_line_without_newline_is_parsed);
+  RUN_TEST(test_overlong_ssid_is_truncated_not_overflowed);
+  RUN_TEST(test_band_maps_onto_the_expected_sweep_plan);
+  return UNITY_END();
+}

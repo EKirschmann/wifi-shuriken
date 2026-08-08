@@ -1,0 +1,38 @@
+# WiFi-Shuriken hunt target
+#
+# Copy this file to the ROOT of the SD card as "hunt.txt" and power-cycle.
+# It is read once at boot, before scanning starts.
+#
+# Only hunt_* firmware builds read this file. A wardriving build ignores it
+# entirely, so a stale hunt.txt cannot quietly narrow a mapping run.
+#
+# Keys (all optional, '#' or ';' starts a comment):
+#
+#   bssid   Target MAC. Accepts F2:2F:E4:6B:D2:9E, f2-2f-e4-6b-d2-9e, or
+#           F22FE46BD29E. A blank value clears the filter.
+#           Aliases: mac, target
+#
+#   ssid    Optional case-insensitive substring match. Blank clears it.
+#           Prefer matching on bssid alone: an SSID is trivial for another
+#           team to spoof, a BSSID sighting is what you actually want to chase.
+#           If both are set, BOTH must match.
+#
+#   band    2.4 | 5 | all | default
+#           2.4      channels 1-11 only        (~1.2s sweep, 1 scanner)
+#           5        the 9 non-DFS fox chans   (~1.0s sweep, 1 scanner)
+#           all      full dual-band coverage   (~6.0s sweep, 1 scanner)
+#           default  keep whatever the firmware was built with
+#
+# Anything unparseable is reported on the console at boot and the built-in
+# value is kept -- it never silently hunts nothing.
+#
+# RF Village 2026 targets:
+#   YT WiFi AP Hard Fox          F2:22:28:43:1E:7C   band = 2.4
+#   Lagos WiFi 5GHz AP Hard Fox  F2:2F:E4:6B:D2:9E   band = 5
+#   Mr Lee WiFi Client Hard Fox  F2:0D:18:39:70:D3   NOT findable by this
+#     firmware. It is a station, not an AP -- it never beacons, and the
+#     scanners use a normal network scan rather than monitor mode.
+
+bssid = F2:2F:E4:6B:D2:9E
+ssid  =
+band  = 5

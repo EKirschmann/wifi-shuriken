@@ -20,6 +20,7 @@
 #include "controller_gnss_runtime.h"
 #include "controller_mtp_storage.h"
 #include "controller_scanner_runtime.h"
+#include "hunt_config.h"
 #include "controller_status.h"
 #include "controller_update_runtime.h"
 
@@ -34,6 +35,11 @@ Adafruit_NeoPixel pixels(NUMPIXELS, RGB_PIN, NEO_GRB + NEO_KHZ800);
 TinyGPSPlus gps;
 TinyGPSPlus gps_phone;
 using QueuedScanResult = pico_logging::QueuedScanResult;
+
+// Hunt overrides read from the SD card during setup() on core0 and handed to
+// core1 read-only. Left zeroed when no usable config file is present.
+static HuntConfig hunt_config;
+static bool hunt_config_loaded = false;
 
 // Cross-core queues:
 // - core1 (SPI/scanner) produces scan rows + diagnostic lines.
@@ -257,6 +263,65 @@ static void maybeRequestDedupeResetOnFixAcquire(bool usable_fix) {
 #endif
 }
 
+// Reads the optional hunt override file from the SD card. Every failure path
+// falls back to the built-in target rather than refusing to scan, and says why:
+// a silent fallback would look exactly like a fox that is not transmitting.
+static void loadHuntConfigFromSd(bool sd_ready) {
+  huntConfigInit(hunt_config);
+  hunt_config_loaded = false;
+
+#if !HUNT_MODE_ENABLED
+  // Wardriving builds ignore the file entirely so a stale hunt.txt cannot
+  // quietly narrow a mapping run to a single band.
+  (void)sd_ready;
+#else
+  if (!sd_ready) {
+    Serial.println("Hunt config skipped: no SD; using built-in hunt target");
+    return;
+  }
+  if (!sd.exists(HUNT_CONFIG_PATH)) {
+    Serial.println("No " HUNT_CONFIG_PATH " on SD; using built-in hunt target");
+    return;
+  }
+
+  FsFile config_file = sd.open(HUNT_CONFIG_PATH, O_RDONLY);
+  if (!config_file) {
+    Serial.println("Hunt config could not be opened; using built-in hunt target");
+    return;
+  }
+
+  char text[HUNT_CONFIG_MAX_BYTES] = {};
+  const uint32_t file_size = static_cast<uint32_t>(config_file.size());
+  const int bytes_read =
+      config_file.read(reinterpret_cast<uint8_t*>(text), sizeof(text) - 1);
+  config_file.close();
+
+  if (bytes_read <= 0) {
+    Serial.println("Hunt config is empty; using built-in hunt target");
+    return;
+  }
+  text[bytes_read] = '\0';
+
+  if (file_size > static_cast<uint32_t>(sizeof(text) - 1)) {
+    serialPrintfNormalized("Hunt config truncated to %u of %lu bytes\n",
+                           (unsigned)bytes_read, (unsigned long)file_size);
+  }
+
+  if (!huntConfigParseText(text, static_cast<size_t>(bytes_read), hunt_config)) {
+    serialPrintfNormalized("Hunt config had no usable settings (%u unreadable line(s)); using built-in target\n",
+                           (unsigned)hunt_config.keys_bad);
+    huntConfigInit(hunt_config);
+    return;
+  }
+
+  hunt_config_loaded = true;
+  serialPrintfNormalized("Hunt config loaded from %s: %u setting(s), %u unreadable line(s)\n",
+                         HUNT_CONFIG_PATH,
+                         (unsigned)hunt_config.keys_ok,
+                         (unsigned)hunt_config.keys_bad);
+#endif
+}
+
 void loop2() {
   // core1 only needs the shared runtime context and then hands control to the
   // scanner module permanently.
@@ -268,7 +333,8 @@ void loop2() {
     &last_full_sweep_ms,
     &master_dedupe_table,
     serialQueueTry,
-    &wd_core1_last_ms
+    &wd_core1_last_ms,
+    hunt_config_loaded ? &hunt_config : nullptr
   };
   controllerScannerRuntimeRun(scanner_runtime);
 }
@@ -348,6 +414,9 @@ void setup() {
   if (logging_state.sd_ready) {
     logging.tryAppendBootResetLog();
   }
+  // Read hunt overrides before core1 launches so the scanner runtime sees a
+  // fully populated, read-only config.
+  loadHuntConfigFromSd(logging_state.sd_ready);
   // Queue capacities are sized to tolerate short bursts from core1 while core0
   // is busy with SD or GNSS work.
   queue_init(&scan_result_queue, sizeof(QueuedScanResult), SCAN_RESULT_QUEUE_DEPTH);

@@ -72,7 +72,7 @@ pio run -e hunt_ap_24 --target upload      # 2.4GHz AP target
 pio device monitor                         # watch the [HUNT] lines
 ```
 
-Set the target in `platformio.ini` before flashing:
+Set the build-time default target in `platformio.ini`:
 
 ```ini
 [env:hunt_ap_5g]
@@ -87,6 +87,38 @@ A malformed `HUNT_TARGET_BSSID` is reported at boot rather than silently
 matching nothing. `HUNT_TARGET_SSID` adds an optional case-insensitive substring
 filter, but matching on BSSID alone is usually what you want: an SSID is trivial
 for anyone else to spoof.
+
+### Changing target without reflashing
+
+Baking the target into the firmware means switching foxes needs a rebuild, and
+targets on different bands need different sweeps. Instead, drop a `hunt.txt` at
+the root of the SD card and the firmware reads it once at boot:
+
+```
+bssid = F2:2F:E4:6B:D2:9E
+ssid  =
+band  = 5
+```
+
+`band` accepts `2.4`, `5`, `all`, or `default` (keep the built-in plan), so one
+firmware image can hunt either AP fox. `bssid` also accepts `mac` or `target` as
+key names and tolerates `-` separators or no separators at all. A blank value
+clears a filter, which is how you drop a BSSID baked in at build time. Comments
+use `#` or `;`.
+
+See `hunt.txt.example` for the annotated version. Every failure path falls back
+to the built-in target and says why on the console — a silent fallback would
+look exactly like a fox that is not transmitting:
+
+```
+Hunt config loaded from /hunt.txt: 3 setting(s), 0 unreadable line(s)
+[HUNT] SD config applied: band=5GHz keys_ok=3 keys_bad=0
+[HUNT] hunting bssid=F2:2F:E4:6B:D2:9E ssid~='any' dedupe_bypass=1
+[HUNT] sweep: 2.4GHz=off(0 ch) 5GHz=on(9 ch)
+```
+
+Wardriving builds ignore `hunt.txt` completely, so a card left over from a hunt
+cannot narrow a mapping run to one band.
 
 Console output looks like:
 

@@ -10,6 +10,7 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 #include "channel_scheduler.h"
+#include "hunt_config.h"
 #include "hunt_mode.h"
 #include "pico_logging.h"
 #include "spi_protocol_shared.h"
@@ -113,6 +114,9 @@ static bool scanner_shiftreg_outputs_enabled = false;
 static ScannerSlotState scanner_slot_state[SCANNER_SLOT_COUNT] = {};
 // A single global channel dispatch plan is shared across all scanner slots.
 static ChannelScheduleState scanner_schedule_state = {};
+// The sweep plan itself. Starts as the build's default and may be re-pointed
+// once from the SD hunt config before core1 begins scheduling.
+static ChannelPlan scanner_channel_plan = channelPlanDefault();
 static bool scanner_sweep_timing_active = false;
 static uint32_t scanner_sweep_started_ms = 0;
 static uint8_t scanner_slot = SCANNER_INITIAL_SLOT;
@@ -155,6 +159,45 @@ static void scannerSerialPrintfTry(const char* fmt, ...) {
 static HuntTarget hunt_target = {};
 static HuntTargetState hunt_state = {};
 
+// Applies overrides parsed from the SD card on core0. Only hunt builds consult
+// the file: a wardriving build must not silently narrow its sweep because a
+// stale hunt.txt was left on the card.
+static void huntApplySdConfig() {
+  const HuntConfig* cfg = scanner_runtime_context.hunt_config;
+  if (cfg == nullptr) {
+    return;
+  }
+
+  if (cfg->bssid_seen) {
+    if (cfg->has_bssid) {
+      memcpy(hunt_target.bssid, cfg->bssid, sizeof(hunt_target.bssid));
+      hunt_target.bssid_valid = true;
+    } else {
+      hunt_target.bssid_valid = false;
+    }
+  }
+
+  if (cfg->ssid_seen) {
+    if (cfg->has_ssid) {
+      strncpy(hunt_target.ssid, cfg->ssid, sizeof(hunt_target.ssid) - 1);
+      hunt_target.ssid[sizeof(hunt_target.ssid) - 1] = '\0';
+      hunt_target.ssid_valid = true;
+    } else {
+      hunt_target.ssid[0] = '\0';
+      hunt_target.ssid_valid = false;
+    }
+  }
+
+  if (cfg->band != HUNT_BAND_KEEP_DEFAULT) {
+    scanner_channel_plan = huntConfigChannelPlan(*cfg);
+  }
+
+  scannerSerialPrintfTry("[HUNT] SD config applied: band=%s keys_ok=%u keys_bad=%u\n",
+                         huntConfigBandName(cfg->band),
+                         (unsigned)cfg->keys_ok,
+                         (unsigned)cfg->keys_bad);
+}
+
 static void huntAnnounceConfig() {
   if (!huntTargetIsConfigured(hunt_target)) {
     // Almost always a malformed HUNT_TARGET_BSSID build flag. Say so loudly:
@@ -175,6 +218,16 @@ static void huntAnnounceConfig() {
                          mac,
                          hunt_target.ssid_valid ? hunt_target.ssid : "any",
                          (unsigned)HUNT_BYPASS_DEDUPE);
+
+  // Report the sweep actually in force so a mis-set band is obvious at boot
+  // rather than looking like an absent fox.
+  const bool uses_24g = channelPlanUsesBand(scanner_channel_plan, WIFI_BAND_24_GHZ);
+  const bool uses_5g = channelPlanUsesBand(scanner_channel_plan, WIFI_BAND_5_GHZ);
+  scannerSerialPrintfTry("[HUNT] sweep: 2.4GHz=%s(%u ch) 5GHz=%s(%u ch)\n",
+                         uses_24g ? "on" : "off",
+                         (unsigned)(uses_24g ? scanner_channel_plan.count_24g : 0),
+                         uses_5g ? "on" : "off",
+                         (unsigned)(uses_5g ? scanner_channel_plan.count_5g : 0));
 }
 
 static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
@@ -308,7 +361,7 @@ static inline void advanceSweepChannelAndLog(ChannelScheduleState& schedule_stat
                                              uint32_t& started_ms) {
   // The scheduler is global across all slots. A coverage cycle completes once
   // both bands have wrapped at least once under the mixed-band dispatch plan.
-  if (channelScheduleAdvance(schedule_state)) {
+  if (channelScheduleAdvance(scanner_channel_plan, schedule_state)) {
     if (timing_active) {
       const uint32_t elapsed_ms = millis() - started_ms;
       *scanner_runtime_context.last_full_sweep_ms = elapsed_ms;
@@ -1180,7 +1233,7 @@ static void startScanForCurrentChannel(uint8_t slot,
                                        uint32_t& sweep_started_ms) {
   // Every slot draws work from the same shared dispatch plan. A slot that
   // successfully starts a scan advances the global plan for the next slot.
-  const ChannelScheduleEntry scheduled = channelScheduleCurrent(schedule_state);
+  const ChannelScheduleEntry scheduled = channelScheduleCurrent(scanner_channel_plan, schedule_state);
   const uint8_t band = scheduled.band;
   const uint8_t channel = scheduled.channel;
   sweepTimingNoteStart(sweep_timing_active, sweep_started_ms);
@@ -1532,6 +1585,7 @@ void controllerScannerRuntimeRun(const ControllerScannerRuntimeContext& context)
   scannerSerialPrintlnTry("Core1 SPI loop started");
 #if HUNT_MODE_ENABLED
   hunt_target = huntTargetFromConfig();
+  huntApplySdConfig();
   huntAnnounceConfig();
 #endif
 #if SCANNER_USE_SHIFTREG_CS
