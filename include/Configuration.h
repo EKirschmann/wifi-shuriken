@@ -256,6 +256,13 @@
 #define CONTROLLER_DEDUPE_RESET_COOLDOWN_MS 15000
 #endif
 
+// Fox-hunt mode knobs (HUNT_MODE_ENABLED, HUNT_TARGET_BSSID, HUNT_TARGET_SSID,
+// HUNT_BYPASS_DEDUPE, HUNT_LIVE_PRINT, HUNT_IDLE_NOTICE_MS, HUNT_BAR_*) are
+// defined in include/hunt_mode.h so the native test suites can use them without
+// pulling in this controller-specific header. The channel sweep preset
+// (CHANNEL_PLAN) lives in include/channel_scheduler.h. Both are set per build
+// environment; see the hunt_* environments in platformio.ini.
+
 // SPI delay between command and follow-up polling frame in microseconds.
 #ifndef ESP_INTERFRAME_US
 #define ESP_INTERFRAME_US 10  // Delay between SPI command and response pulls.

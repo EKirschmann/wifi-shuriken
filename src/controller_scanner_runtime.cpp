@@ -10,6 +10,7 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 #include "channel_scheduler.h"
+#include "hunt_mode.h"
 #include "pico_logging.h"
 #include "spi_protocol_shared.h"
 #include "wifi_result_utils.h"
@@ -147,6 +148,105 @@ static void scannerSerialPrintfTry(const char* fmt, ...) {
   scannerSerialQueueTry(buf);
 #endif
 }
+
+#if HUNT_MODE_ENABLED
+// Hunt mode tracks exactly one target. Both live on core1 alongside the rest of
+// the scanner runtime state.
+static HuntTarget hunt_target = {};
+static HuntTargetState hunt_state = {};
+
+static void huntAnnounceConfig() {
+  if (!huntTargetIsConfigured(hunt_target)) {
+    // Almost always a malformed HUNT_TARGET_BSSID build flag. Say so loudly:
+    // silently hunting nothing is the worst possible failure here.
+    scannerSerialPrintlnTry("[HUNT] WARNING: hunt mode enabled but no valid target configured");
+    scannerSerialPrintfTry("[HUNT] HUNT_TARGET_BSSID='%s' HUNT_TARGET_SSID='%s'\n",
+                           HUNT_TARGET_BSSID, HUNT_TARGET_SSID);
+    return;
+  }
+
+  char mac[18] = {};
+  if (hunt_target.bssid_valid) {
+    pico_logging::formatBssid(hunt_target.bssid, mac, sizeof(mac));
+  } else {
+    strncpy(mac, "any", sizeof(mac) - 1);
+  }
+  scannerSerialPrintfTry("[HUNT] hunting bssid=%s ssid~='%s' dedupe_bypass=%u\n",
+                         mac,
+                         hunt_target.ssid_valid ? hunt_target.ssid : "any",
+                         (unsigned)HUNT_BYPASS_DEDUPE);
+}
+
+static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
+  const uint32_t now = millis();
+  const bool first = !hunt_state.seen;
+  const uint32_t gap_ms = first ? 0u : (now - hunt_state.last_seen_ms);
+  const int8_t prev_rssi = hunt_state.last_rssi;
+  huntStateNoteHit(hunt_state, result.rssi, now);
+
+#if HUNT_LIVE_PRINT
+  if (first) {
+    char mac[18] = {};
+    pico_logging::formatBssid(result.bssid, mac, sizeof(mac));
+    scannerSerialPrintfTry("[HUNT] ACQUIRED bssid=%s ssid='%s' ch=%u band=%u rssi=%d\n",
+                           mac,
+                           result.ssid,
+                           (unsigned)result.channel,
+                           (unsigned)result.band,
+                           (int)result.rssi);
+  }
+
+  char bar[HUNT_BAR_WIDTH + 1] = {};
+  huntFormatBar(result.rssi, bar, sizeof(bar));
+  char gap[16] = {};
+  huntFormatElapsed(gap_ms, gap, sizeof(gap));
+
+  char trend = '=';
+  if (!first) {
+    trend = (result.rssi > prev_rssi) ? '+' : ((result.rssi < prev_rssi) ? '-' : '=');
+  }
+
+  scannerSerialPrintfTry("[HUNT] %c rssi=%-4d best=%-4d ch=%-3u hits=%-5lu gap=%-7s [%s] S%u\n",
+                         trend,
+                         (int)result.rssi,
+                         (int)hunt_state.best_rssi,
+                         (unsigned)result.channel,
+                         (unsigned long)hunt_state.hits,
+                         gap,
+                         bar,
+                         (unsigned)slot);
+#else
+  (void)slot;
+  (void)gap_ms;
+  (void)first;
+  (void)prev_rssi;
+#endif
+}
+
+// The hard foxes sleep 45s between 30s transmit windows, so a gap in sightings
+// is expected rather than a fault. Print a heartbeat during silence so a dead
+// console is distinguishable from a sleeping fox.
+static void huntServiceIdleNotice() {
+#if HUNT_IDLE_NOTICE_MS > 0
+  if (!hunt_state.seen) {
+    return;
+  }
+  const uint32_t now = millis();
+  if ((uint32_t)(now - hunt_state.last_idle_notice_ms) < (uint32_t)HUNT_IDLE_NOTICE_MS) {
+    return;
+  }
+  hunt_state.last_idle_notice_ms = now;
+
+  char gap[16] = {};
+  huntFormatElapsed(now - hunt_state.last_seen_ms, gap, sizeof(gap));
+  scannerSerialPrintfTry("[HUNT] . no contact for %s (last rssi=%d best=%d hits=%lu)\n",
+                         gap,
+                         (int)hunt_state.last_rssi,
+                         (int)hunt_state.best_rssi,
+                         (unsigned long)hunt_state.hits);
+#endif
+}
+#endif  // HUNT_MODE_ENABLED
 
 void controllerScannerRuntimeRequestDedupeReset() {
   __atomic_store_n(&scanner_dedupe_reset_requested, true, __ATOMIC_RELEASE);
@@ -1344,11 +1444,23 @@ static void processScannerSlot(uint8_t slot,
         continue;
       }
 
+#if HUNT_MODE_ENABLED
+      const bool hunt_match = huntTargetMatches(hunt_target, pkt.result);
+      if (hunt_match) {
+        huntNoteTargetSighting(slot, pkt.result);
+      }
+      const bool hunt_keep_duplicate = hunt_match && (HUNT_BYPASS_DEDUPE != 0);
+#else
+      const bool hunt_keep_duplicate = false;
+#endif
+
       WiFiDedupeHash hash = {};
       wifiDedupeHashFromResult(pkt.result, hash);
       // Controller-side dedupe suppresses duplicates across all scanners, not
-      // just within the reporting slot.
-      if (!wifiDedupeTableRemember(scanner_runtime_context.master_dedupe_table, &hash)) {
+      // just within the reporting slot. The hunt target is exempt: every
+      // sighting is queued so the CSV keeps a GPS-stamped RSSI track of it.
+      if (!wifiDedupeTableRemember(scanner_runtime_context.master_dedupe_table, &hash) &&
+          !hunt_keep_duplicate) {
         (*scanner_runtime_context.dedupe_drops)++;
         batch_dedupe_hits++;
 #if LOG_DEDUPE_HITS
@@ -1418,6 +1530,10 @@ void controllerScannerRuntimeRun(const ControllerScannerRuntimeContext& context)
   scanner_slot = SCANNER_INITIAL_SLOT;
 
   scannerSerialPrintlnTry("Core1 SPI loop started");
+#if HUNT_MODE_ENABLED
+  hunt_target = huntTargetFromConfig();
+  huntAnnounceConfig();
+#endif
 #if SCANNER_USE_SHIFTREG_CS
   for (uint8_t s = 0; s < SCANNER_SLOT_COUNT; s++) {
     scannerSetActiveSlot(s);
@@ -1434,6 +1550,9 @@ void controllerScannerRuntimeRun(const ControllerScannerRuntimeContext& context)
           to_ms_since_boot(get_absolute_time());
     }
     handlePendingDedupeResetRequest();
+#if HUNT_MODE_ENABLED
+    huntServiceIdleNotice();
+#endif
     // Each iteration services exactly one slot; round-robin when shift-reg CS is enabled.
     scannerSetActiveSlot(scanner_slot);
     if (ensureScannerSlotIdentity(scanner_slot, scanner_slot_state[scanner_slot])) {

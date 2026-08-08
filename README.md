@@ -40,3 +40,73 @@ When your drive is complete or you want the files;
 - Grab the SD Card
 - Upload the files to WiGLE for Free Internet Points
 
+## Fox-hunt mode
+
+The default firmware is a wardriver: it deduplicates every BSSID for the whole
+session and writes one CSV row per network. That is the right behaviour for
+mapping and the wrong behaviour for hunting a single transmitter, where the
+useful signal is how one known BSSID's RSSI changes as you walk.
+
+Hunt mode leaves the wardriving path intact and adds a parallel path for one
+target:
+
+- **Dedupe bypass for the target.** Every sighting of the target BSSID is
+  reported instead of only the first, so the CSV keeps a GPS-stamped RSSI track
+  of it and the console can show it live.
+- **Live console output.** Each sighting prints RSSI, session best, channel, a
+  trend marker, the gap since the previous sighting, and a fixed-width signal
+  bar that is readable at a glance while walking. A `no contact` heartbeat
+  prints during silence, so a sleeping target is distinguishable from a dead
+  console.
+- **Narrowed channel sweep.** `CHANNEL_PLAN` restricts the sweep to the channels
+  one target can appear on. On a single scanner a full coverage cycle drops from
+  about 6.0s to 1.2s (2.4GHz) or 1.0s (5GHz), which is the difference between a
+  handful of looks at a duty-cycled target and dozens.
+
+Both hunt environments build the same controller hardware as
+`xiao_rp2350_controller`, and the scanner nodes need no changes.
+
+```
+pio run -e hunt_ap_5g --target upload      # 5GHz AP target
+pio run -e hunt_ap_24 --target upload      # 2.4GHz AP target
+pio device monitor                         # watch the [HUNT] lines
+```
+
+Set the target in `platformio.ini` before flashing:
+
+```ini
+[env:hunt_ap_5g]
+extends = hunt_controller_base
+build_flags =
+    ${hunt_controller_base.build_flags}
+    -DCHANNEL_PLAN=2
+    -DHUNT_TARGET_BSSID=\"F2:2F:E4:6B:D2:9E\"
+```
+
+A malformed `HUNT_TARGET_BSSID` is reported at boot rather than silently
+matching nothing. `HUNT_TARGET_SSID` adds an optional case-insensitive substring
+filter, but matching on BSSID alone is usually what you want: an SSID is trivial
+for anyone else to spoof.
+
+Console output looks like:
+
+```
+[HUNT] hunting bssid=F2:2F:E4:6B:D2:9E ssid~='any' dedupe_bypass=1
+[HUNT] ACQUIRED bssid=F2:2F:E4:6B:D2:9E ssid='...' ch=149 band=5 rssi=-81
+[HUNT] + rssi=-74  best=-74  ch=149 hits=7     gap=0.9s   [######--------------] S0
+[HUNT] + rssi=-66  best=-66  ch=149 hits=8     gap=1.0s   [#########-----------] S0
+[HUNT] . no contact for 12.0s (last rssi=-66 best=-66 hits=8)
+```
+
+### What hunt mode does not do
+
+The scanners use a normal WiFi network scan, not monitor mode, so they only see
+transmitters that beacon. A **client/station target never beacons** — it emits
+probe requests and association attempts — and therefore cannot be found with
+this firmware at all. Use a monitor-mode capable device for those, or stand up
+an AP with the SSID the client is looking for and track it from the AP side.
+
+Hunt mode also gives range, not bearing. An omnidirectional antenna plus RSSI
+narrows a target down to a radius; a directional antenna on one scanner node is
+what turns that into a direction.
+
