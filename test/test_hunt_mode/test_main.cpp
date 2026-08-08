@@ -158,11 +158,72 @@ void test_elapsed_formatting_avoids_floating_point() {
   TEST_ASSERT_EQUAL_STRING("45.0s", out);
 }
 
+// The LED blinks faster the closer you are, so the period must fall as RSSI
+// rises. A non-monotonic mapping would make the readout actively misleading.
+void test_led_period_shortens_as_signal_rises() {
+  TEST_ASSERT_EQUAL_UINT32(HUNT_LED_PERIOD_FAR_MS, huntLedPeriodMs(HUNT_BAR_RSSI_MIN));
+  TEST_ASSERT_EQUAL_UINT32(HUNT_LED_PERIOD_NEAR_MS, huntLedPeriodMs(HUNT_BAR_RSSI_MAX));
+
+  // Clamped outside the readout range rather than running away.
+  TEST_ASSERT_EQUAL_UINT32(HUNT_LED_PERIOD_FAR_MS, huntLedPeriodMs(-120));
+  TEST_ASSERT_EQUAL_UINT32(HUNT_LED_PERIOD_NEAR_MS, huntLedPeriodMs(-5));
+
+  for (int rssi = -120; rssi < 0; rssi++) {
+    TEST_ASSERT_TRUE(huntLedPeriodMs((int8_t)(rssi + 1)) <= huntLedPeriodMs((int8_t)rssi));
+  }
+}
+
+void test_led_brightness_rises_with_signal() {
+  TEST_ASSERT_EQUAL_UINT8(HUNT_LED_BRIGHT_MIN, huntLedBrightness(HUNT_BAR_RSSI_MIN));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_LED_BRIGHT_MAX, huntLedBrightness(HUNT_BAR_RSSI_MAX));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_LED_BRIGHT_MIN, huntLedBrightness(-120));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_LED_BRIGHT_MAX, huntLedBrightness(-5));
+
+  for (int rssi = -120; rssi < 0; rssi++) {
+    TEST_ASSERT_TRUE(huntLedBrightness((int8_t)(rssi + 1)) >= huntLedBrightness((int8_t)rssi));
+  }
+}
+
+void test_led_blink_duty_cycle() {
+  TEST_ASSERT_TRUE(huntLedIsOn(0, 1000, 350));
+  TEST_ASSERT_TRUE(huntLedIsOn(349, 1000, 350));
+  TEST_ASSERT_FALSE(huntLedIsOn(350, 1000, 350));
+  TEST_ASSERT_FALSE(huntLedIsOn(999, 1000, 350));
+  // Wraps with the free-running clock.
+  TEST_ASSERT_TRUE(huntLedIsOn(1000, 1000, 350));
+  TEST_ASSERT_TRUE(huntLedIsOn(123456000, 1000, 350));
+  // A zero period must not divide by zero.
+  TEST_ASSERT_FALSE(huntLedIsOn(500, 0, 350));
+}
+
+// The bar and the LED read from the same scaling helper, so a strong signal can
+// never show a full bar and a slow blink at the same time.
+void test_bar_and_led_agree_on_direction() {
+  char weak[HUNT_BAR_WIDTH + 1] = {};
+  char strong[HUNT_BAR_WIDTH + 1] = {};
+  huntFormatBar(-90, weak, sizeof(weak));
+  huntFormatBar(-40, strong, sizeof(strong));
+
+  size_t weak_filled = 0, strong_filled = 0;
+  for (size_t i = 0; i < HUNT_BAR_WIDTH; i++) {
+    if (weak[i] == '#') weak_filled++;
+    if (strong[i] == '#') strong_filled++;
+  }
+
+  TEST_ASSERT_TRUE(strong_filled > weak_filled);
+  TEST_ASSERT_TRUE(huntLedPeriodMs(-40) < huntLedPeriodMs(-90));
+  TEST_ASSERT_TRUE(huntLedBrightness(-40) > huntLedBrightness(-90));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
 
   UNITY_BEGIN();
+  RUN_TEST(test_led_period_shortens_as_signal_rises);
+  RUN_TEST(test_led_brightness_rises_with_signal);
+  RUN_TEST(test_led_blink_duty_cycle);
+  RUN_TEST(test_bar_and_led_agree_on_direction);
   RUN_TEST(test_parse_bssid_accepts_common_separators);
   RUN_TEST(test_parse_bssid_rejects_malformed_input);
   RUN_TEST(test_bssid_only_target_matches_regardless_of_ssid);

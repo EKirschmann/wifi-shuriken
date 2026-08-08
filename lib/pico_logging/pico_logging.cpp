@@ -590,7 +590,15 @@ void Logger::tryRecoverSdLogging() {
   }
 
   if (!ensureBootTimestampFromClock()) {
-    serial_.println("Waiting for valid GNSS time before creating CSV log file");
+    // This path retries about once a second, so indoors the message would
+    // otherwise repeat forever and drown everything else on the console.
+    static uint32_t last_gnss_wait_log_ms = 0;
+    const uint32_t now_ms = millis();
+    if (last_gnss_wait_log_ms == 0 ||
+        (uint32_t)(now_ms - last_gnss_wait_log_ms) >= (uint32_t)GNSS_WAIT_LOG_INTERVAL_MS) {
+      last_gnss_wait_log_ms = now_ms;
+      serial_.println("Waiting for valid GNSS time before creating CSV log file");
+    }
     return;
   }
 

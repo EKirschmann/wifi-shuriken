@@ -235,6 +235,20 @@
 #define SCAN_LOG_NORMAL_STARTS 0  // 1 enables logging of all successful scan starts.
 #endif
 
+// Log a line each time the scheduler completes a full coverage cycle. Useful
+// while wardriving, but a narrowed hunt sweep completes several times a second,
+// which buries the [HUNT] lines a hunter is actually watching for.
+#ifndef LOG_SWEEP_CYCLE_COMPLETE
+#define LOG_SWEEP_CYCLE_COMPLETE 1
+#endif
+
+// Minimum gap between repeats of the "waiting for GNSS time" log line. Without
+// a fix the recovery path retries about once a second, which indoors means the
+// message never stops.
+#ifndef GNSS_WAIT_LOG_INTERVAL_MS
+#define GNSS_WAIT_LOG_INTERVAL_MS 30000
+#endif
+
 // Log number of controller-side dedupe hits per scan when the buffered results are emitted.
 #ifndef LOG_DEDUPE_HITS
 #define LOG_DEDUPE_HITS 0  // 1 enables logging of dedupe hits.

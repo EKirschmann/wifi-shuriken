@@ -8,12 +8,17 @@ ControllerStatus controllerStatusCompute(bool sd_ready, bool usable_fix, bool cs
   return ControllerStatus::OPERATIONAL;
 }
 
+static ControllerStatus g_last_status = static_cast<ControllerStatus>(0xFF);
+
+void controllerStatusForceLedRefresh() {
+  g_last_status = static_cast<ControllerStatus>(0xFF);
+}
+
 void controllerStatusUpdateLed(Adafruit_NeoPixel& pixels, ControllerStatus status) {
-  static ControllerStatus last_status = static_cast<ControllerStatus>(0xFF);
-  if (status == last_status) {
+  if (status == g_last_status) {
     return;
   }
-  last_status = status;
+  g_last_status = status;
 
   uint32_t color;
   switch (status) {

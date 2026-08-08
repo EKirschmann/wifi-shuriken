@@ -19,3 +19,9 @@ ControllerStatus controllerStatusCompute(bool sd_ready, bool usable_fix, bool cs
 // Update the NeoPixel LED to reflect status. Caches last value to skip
 // redundant SPI writes.
 void controllerStatusUpdateLed(Adafruit_NeoPixel& pixels, ControllerStatus status);
+
+// Drop the cached value so the next controllerStatusUpdateLed() repaints even
+// if the status has not changed. Required after anything else has driven the
+// pixel, otherwise the cache suppresses the repaint and the LED keeps showing
+// the other renderer's colour.
+void controllerStatusForceLedRefresh();

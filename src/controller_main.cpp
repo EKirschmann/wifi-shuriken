@@ -41,6 +41,11 @@ using QueuedScanResult = pico_logging::QueuedScanResult;
 static HuntConfig hunt_config;
 static bool hunt_config_loaded = false;
 
+// Latest target sighting, written by core1 and read by core0 to drive the
+// signal-strength LED. Approximate by design: a torn read costs one blink.
+static volatile int32_t hunt_last_rssi = 0;
+static volatile uint32_t hunt_last_seen_ms = 0;
+
 // Cross-core queues:
 // - core1 (SPI/scanner) produces scan rows + diagnostic lines.
 // - core0 (main loop) consumes and performs serial output + SD writes.
@@ -263,6 +268,66 @@ static void maybeRequestDedupeResetOnFixAcquire(bool usable_fix) {
 #endif
 }
 
+// Drives the status LED as a signal-strength readout while the hunt target is
+// in contact: blink rate and brightness both rise with RSSI, in cyan so it can
+// never be confused with the red/orange/amber/green status palette. Returns
+// true while the hunt readout owns the pixel.
+static bool serviceHuntSignalLed(uint32_t now_ms) {
+#if !HUNT_LED_ENABLED
+  (void)now_ms;
+  return false;
+#else
+  static bool owns_led = false;
+  static bool last_on = false;
+  static uint8_t last_bright = 0;
+
+  const uint32_t last_seen = hunt_last_seen_ms;
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  const int8_t rssi = (int8_t)hunt_last_rssi;
+
+  const bool in_contact = (last_seen != 0) &&
+      ((uint32_t)(now_ms - last_seen) <= (uint32_t)HUNT_LED_HOLD_MS);
+  if (!in_contact) {
+    if (owns_led) {
+      // Hand the pixel back and force a repaint, or the status renderer's
+      // cache would suppress it and leave our colour on screen.
+      owns_led = false;
+      last_on = false;
+      last_bright = 0;
+      controllerStatusForceLedRefresh();
+    }
+    return false;
+  }
+
+  uint32_t period_ms;
+  uint32_t on_ms;
+  uint8_t bright;
+  if ((uint32_t)(now_ms - last_seen) <= (uint32_t)HUNT_LED_FRESH_MS) {
+    period_ms = huntLedPeriodMs(rssi);
+    on_ms = (period_ms * (uint32_t)HUNT_LED_ON_PERCENT) / 100u;
+    bright = huntLedBrightness(rssi);
+  } else {
+    // Past the freshness window this is a "last seen here" marker, not a live
+    // reading. A slow dim flash keeps that distinction visible during the
+    // fox's sleep window.
+    period_ms = (uint32_t)HUNT_LED_STALE_PERIOD_MS;
+    on_ms = (uint32_t)HUNT_LED_STALE_ON_MS;
+    bright = (uint8_t)HUNT_LED_STALE_BRIGHT;
+  }
+
+  const bool on = huntLedIsOn(now_ms, period_ms, on_ms);
+  if (!owns_led || on != last_on || bright != last_bright) {
+    owns_led = true;
+    last_on = on;
+    last_bright = bright;
+    pixels.setPixelColor(0, on ? pixels.Color(0, bright, bright)
+                               : pixels.Color(0, 0, 0));
+    pixels.show();
+  }
+  return true;
+#endif
+}
+
 // Reads the optional hunt override file from the SD card. Every failure path
 // falls back to the built-in target rather than refusing to scan, and says why:
 // a silent fallback would look exactly like a fox that is not transmitting.
@@ -334,7 +399,9 @@ void loop2() {
     &master_dedupe_table,
     serialQueueTry,
     &wd_core1_last_ms,
-    hunt_config_loaded ? &hunt_config : nullptr
+    hunt_config_loaded ? &hunt_config : nullptr,
+    &hunt_last_rssi,
+    &hunt_last_seen_ms
   };
   controllerScannerRuntimeRun(scanner_runtime);
 }
@@ -543,8 +610,12 @@ void loop() {
     controllerMtpStorageUnlock();
   }
 
-  controllerStatusUpdateLed(pixels, controllerStatusCompute(
-      logging_state.sd_ready, usable_fix, logging_state.csv_ready));
+  // The hunt readout takes the LED while the target is in contact; otherwise
+  // the normal SD/GPS status colour applies.
+  if (!serviceHuntSignalLed(millis())) {
+    controllerStatusUpdateLed(pixels, controllerStatusCompute(
+        logging_state.sd_ready, usable_fix, logging_state.csv_ready));
+  }
 
   printPeriodicStatus(usable_hw_fix, usable_phone_fix);
 }

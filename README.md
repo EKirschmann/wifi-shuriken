@@ -61,7 +61,16 @@ target:
 - **Narrowed channel sweep.** `CHANNEL_PLAN` restricts the sweep to the channels
   one target can appear on. On a single scanner a full coverage cycle drops from
   about 6.0s to 1.2s (2.4GHz) or 1.0s (5GHz), which is the difference between a
-  handful of looks at a duty-cycled target and dozens.
+  handful of looks at a duty-cycled target and dozens. The scheduler advances on
+  scan start, so with N scanners the real cycle time is roughly that divided by
+  N.
+- **Signal-strength LED.** The status LED becomes a proximity readout while the
+  target is in contact, so the device is usable with nothing but a USB power
+  bank. See below.
+- **A quiet console.** Hunt builds suppress the per-coverage-cycle log line
+  (`LOG_SWEEP_CYCLE_COMPLETE=0`) and rate-limit the "waiting for GNSS time"
+  message. A narrowed sweep completes several times a second and indoors there
+  is never a fix, so both would otherwise bury the `[HUNT]` lines.
 
 Both hunt environments build the same controller hardware as
 `xiao_rp2350_controller`, and the scanner nodes need no changes.
@@ -129,6 +138,30 @@ Console output looks like:
 [HUNT] + rssi=-66  best=-66  ch=149 hits=8     gap=1.0s   [#########-----------] S0
 [HUNT] . no contact for 12.0s (last rssi=-66 best=-66 hits=8)
 ```
+
+### Hunting without a laptop
+
+The controller is headless, so by default the only way to read a hunt is a
+terminal on the USB console — which means carrying a laptop or a phone with an
+OTG cable while trying to direction-find.
+
+In a hunt build the status LED solves that. Once the target has been seen, the
+LED stops reporting SD/GPS health and becomes a Geiger-counter style proximity
+readout:
+
+- **Blink rate** rises as the signal rises: about 1.2s per blink at -95 dBm down
+  to 90ms at -30 dBm.
+- **Brightness** rises with it, so a strong signal is both fast and bright.
+- **Cyan**, deliberately — the status palette is red/orange/amber/green, so a
+  hunt readout can never be misread as a fault code.
+- After `HUNT_LED_FRESH_MS` (4s) without a sighting it drops to a slow dim flash
+  meaning "last seen here" rather than continuing to advertise a stale reading.
+  The hard foxes sleep 45s between 30s transmit windows, so this state is normal
+  mid-hunt.
+- After `HUNT_LED_HOLD_MS` (90s) it hands the LED back to the status renderer.
+
+So the field kit is a USB power bank and the device in your hand. Tuning lives
+in `include/hunt_mode.h` (`HUNT_LED_*`).
 
 ### What hunt mode does not do
 

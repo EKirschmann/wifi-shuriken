@@ -31,6 +31,11 @@ struct ControllerScannerRuntimeContext {
   // Optional hunt overrides parsed from the SD card on core0 before core1
   // starts. Null means "use the values this firmware was built with".
   const HuntConfig* hunt_config;
+  // Latest target sighting, published by core1 so core0 can drive the
+  // signal-strength LED. Written rssi-first then timestamp, so a reader that
+  // sees a fresh timestamp also sees the matching rssi.
+  volatile int32_t* hunt_last_rssi;
+  volatile uint32_t* hunt_last_seen_ms;
 };
 
 // Initialize the SPI1 bus and any scanner CS hardware.

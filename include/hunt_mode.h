@@ -53,7 +53,8 @@
 #define HUNT_IDLE_NOTICE_MS 10000
 #endif
 
-// RSSI range mapped onto the signal bar, in dBm.
+// RSSI range mapped onto the signal bar, in dBm. Also the range used for the
+// status LED, so both readouts agree.
 #ifndef HUNT_BAR_RSSI_MIN
 #define HUNT_BAR_RSSI_MIN (-95)
 #endif
@@ -63,6 +64,97 @@
 #ifndef HUNT_BAR_WIDTH
 #define HUNT_BAR_WIDTH 20
 #endif
+
+// ---------------------------------------------------------------------------
+// Signal-strength LED.
+//
+// The status LED normally reports SD and GPS health, which indoors is stuck on
+// "no fix" and tells a hunter nothing. In a hunt build the LED switches to a
+// Geiger-counter readout of the target instead: it blinks faster and brighter
+// as the signal rises, so the device can be used with nothing but a USB power
+// bank -- no laptop, no phone, no terminal.
+//
+// Hue is deliberately cyan, which is not in the status palette (red/orange/
+// amber/green), so a hunt readout can never be mistaken for a fault code.
+// ---------------------------------------------------------------------------
+
+#ifndef HUNT_LED_ENABLED
+#define HUNT_LED_ENABLED HUNT_MODE_ENABLED
+#endif
+
+// A sighting newer than this drives the live blink rate.
+#ifndef HUNT_LED_FRESH_MS
+#define HUNT_LED_FRESH_MS 4000
+#endif
+
+// Past HUNT_LED_FRESH_MS the LED shows a slow dim "last known" flash instead of
+// pretending the reading is current. The hard foxes sleep 45s between 30s
+// windows, so the hold has to outlast a sleep or the LED would drop back to the
+// status colour on every cycle.
+#ifndef HUNT_LED_HOLD_MS
+#define HUNT_LED_HOLD_MS 90000
+#endif
+
+#ifndef HUNT_LED_PERIOD_FAR_MS
+#define HUNT_LED_PERIOD_FAR_MS 1200
+#endif
+#ifndef HUNT_LED_PERIOD_NEAR_MS
+#define HUNT_LED_PERIOD_NEAR_MS 90
+#endif
+#ifndef HUNT_LED_ON_PERCENT
+#define HUNT_LED_ON_PERCENT 35
+#endif
+#ifndef HUNT_LED_BRIGHT_MIN
+#define HUNT_LED_BRIGHT_MIN 24
+#endif
+#ifndef HUNT_LED_BRIGHT_MAX
+#define HUNT_LED_BRIGHT_MAX 255
+#endif
+#ifndef HUNT_LED_STALE_PERIOD_MS
+#define HUNT_LED_STALE_PERIOD_MS 2500
+#endif
+#ifndef HUNT_LED_STALE_ON_MS
+#define HUNT_LED_STALE_ON_MS 90
+#endif
+#ifndef HUNT_LED_STALE_BRIGHT
+#define HUNT_LED_STALE_BRIGHT 20
+#endif
+
+// Position of an RSSI within the readout range, as a fraction scaled to
+// `scale`. Shared by every mapping below so the bar and the LED never disagree.
+static inline int32_t huntRssiScaled(int8_t rssi, int32_t scale) {
+  int32_t span = (int32_t)HUNT_BAR_RSSI_MAX - (int32_t)HUNT_BAR_RSSI_MIN;
+  if (span <= 0) {
+    span = 1;
+  }
+  int32_t level = (int32_t)rssi - (int32_t)HUNT_BAR_RSSI_MIN;
+  if (level < 0) {
+    level = 0;
+  }
+  if (level > span) {
+    level = span;
+  }
+  return (level * scale) / span;
+}
+
+// Blink period in ms: long when far, short when close.
+static inline uint32_t huntLedPeriodMs(int8_t rssi) {
+  const int32_t range = (int32_t)HUNT_LED_PERIOD_FAR_MS - (int32_t)HUNT_LED_PERIOD_NEAR_MS;
+  return (uint32_t)((int32_t)HUNT_LED_PERIOD_FAR_MS - huntRssiScaled(rssi, range));
+}
+
+static inline uint8_t huntLedBrightness(int8_t rssi) {
+  const int32_t range = (int32_t)HUNT_LED_BRIGHT_MAX - (int32_t)HUNT_LED_BRIGHT_MIN;
+  return (uint8_t)((int32_t)HUNT_LED_BRIGHT_MIN + huntRssiScaled(rssi, range));
+}
+
+// Whether the LED should be lit right now, given a free-running clock.
+static inline bool huntLedIsOn(uint32_t now_ms, uint32_t period_ms, uint32_t on_ms) {
+  if (period_ms == 0) {
+    return false;
+  }
+  return (now_ms % period_ms) < on_ms;
+}
 
 struct HuntTarget {
   uint8_t bssid[6];
@@ -200,17 +292,7 @@ static inline void huntFormatBar(int8_t rssi, char* out, size_t out_len) {
     width = out_len - 1;
   }
 
-  int32_t span = (int32_t)HUNT_BAR_RSSI_MAX - (int32_t)HUNT_BAR_RSSI_MIN;
-  if (span <= 0) {
-    span = 1;
-  }
-  int32_t level = ((int32_t)rssi - (int32_t)HUNT_BAR_RSSI_MIN) * (int32_t)width / span;
-  if (level < 0) {
-    level = 0;
-  }
-  if (level > (int32_t)width) {
-    level = (int32_t)width;
-  }
+  const int32_t level = huntRssiScaled(rssi, (int32_t)width);
 
   for (size_t i = 0; i < width; i++) {
     out[i] = ((int32_t)i < level) ? '#' : '-';

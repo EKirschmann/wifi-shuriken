@@ -237,6 +237,16 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
   const int8_t prev_rssi = hunt_state.last_rssi;
   huntStateNoteHit(hunt_state, result.rssi, now);
 
+  // Publish to core0 for the LED. RSSI first so the timestamp never advertises
+  // a reading that has not landed yet.
+  if (scanner_runtime_context.hunt_last_rssi != nullptr) {
+    *scanner_runtime_context.hunt_last_rssi = (int32_t)result.rssi;
+  }
+  if (scanner_runtime_context.hunt_last_seen_ms != nullptr) {
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    *scanner_runtime_context.hunt_last_seen_ms = now;
+  }
+
 #if HUNT_LIVE_PRINT
   if (first) {
     char mac[18] = {};
@@ -366,12 +376,16 @@ static inline void advanceSweepChannelAndLog(ChannelScheduleState& schedule_stat
       const uint32_t elapsed_ms = millis() - started_ms;
       *scanner_runtime_context.last_full_sweep_ms = elapsed_ms;
       (*scanner_runtime_context.sweep_cycles_completed)++;
-      scannerSerialPrintfTry("Completed full 2.4G + 5G coverage cycle in %lums\n",
+#if LOG_SWEEP_CYCLE_COMPLETE
+      scannerSerialPrintfTry("Completed full coverage cycle in %lums\n",
                              (unsigned long)elapsed_ms);
+#endif
       timing_active = false;
       return;
     }
-    scannerSerialPrintlnTry("Completed full 2.4G + 5G coverage cycle");
+#if LOG_SWEEP_CYCLE_COMPLETE
+    scannerSerialPrintlnTry("Completed full coverage cycle");
+#endif
   }
 }
 
