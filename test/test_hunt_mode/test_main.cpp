@@ -267,6 +267,59 @@ void test_label_falls_back_to_index_when_unset() {
   TEST_ASSERT_EQUAL_STRING("#9", out);
 }
 
+
+// "F2:*" is how you catch a fox whose MAC you were never told: every RFHS fox
+// uses a locally-administered address.
+void test_wildcard_prefix_patterns() {
+  uint8_t out[6] = {};
+
+  TEST_ASSERT_EQUAL_UINT8(1, huntParseBssidPattern("F2:*", out));
+  TEST_ASSERT_EQUAL_UINT8(0xF2, out[0]);
+  TEST_ASSERT_EQUAL_UINT8(2, huntParseBssidPattern("F2:2F:*", out));
+  TEST_ASSERT_EQUAL_UINT8(6, huntParseBssidPattern("F2:2F:E4:6B:D2:9E", out));
+
+  // Half an octet, hex after the wildcard, and short-without-'*' are all typos.
+  TEST_ASSERT_EQUAL_UINT8(0, huntParseBssidPattern("F2:2:*", out));
+  TEST_ASSERT_EQUAL_UINT8(0, huntParseBssidPattern("F2:*:E4", out));
+  TEST_ASSERT_EQUAL_UINT8(0, huntParseBssidPattern("F2:2F", out));
+  TEST_ASSERT_EQUAL_UINT8(0, huntParseBssidPattern("*", out));
+}
+
+void test_wildcard_target_matches_any_fox() {
+  HuntTarget target = {};
+  uint8_t pat[6] = {};
+  const uint8_t len = huntParseBssidPattern("F2:*", pat);
+  TEST_ASSERT_EQUAL_UINT8(1, len);
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, pat, "any fox", len));
+
+  // Both real foxes match the one prefix entry.
+  TEST_ASSERT_EQUAL_INT(0, huntTargetMatchIndex(target, makeResult("", FOX_BSSID, -60)));
+  TEST_ASSERT_EQUAL_INT(0, huntTargetMatchIndex(target, makeResult("", OTHER_BSSID, -60)));
+
+  // A normal vendor MAC does not.
+  const uint8_t vendor[6] = {0x3C, 0x71, 0xBF, 0x01, 0x02, 0x03};
+  TEST_ASSERT_EQUAL_INT(-1, huntTargetMatchIndex(target, makeResult("", vendor, -60)));
+
+  char shown[20] = {};
+  huntTargetFormatPattern(target, 0, shown, sizeof(shown));
+  TEST_ASSERT_EQUAL_STRING("F2:*", shown);
+}
+
+// An exact entry listed after a prefix must still win, so a named fox reports
+// its own label rather than the catch-all.
+void test_exact_entries_take_priority_over_a_later_prefix() {
+  HuntTarget target = {};
+  uint8_t exact[6] = {};
+  uint8_t pat[6] = {};
+  TEST_ASSERT_TRUE(huntParseBssid("F2:2F:E4:6B:D2:9E", exact));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, exact, "5G HARD 1", 6));
+  TEST_ASSERT_EQUAL_UINT8(1, huntParseBssidPattern("F2:*", pat));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, pat, "unknown fox", 1));
+
+  TEST_ASSERT_EQUAL_INT(0, huntTargetMatchIndex(target, makeResult("", FOX_BSSID, -60)));
+  TEST_ASSERT_EQUAL_INT(1, huntTargetMatchIndex(target, makeResult("", OTHER_BSSID, -60)));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -279,6 +332,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_multi_target_match_reports_the_right_index);
   RUN_TEST(test_target_list_is_capped_rather_than_overflowing);
   RUN_TEST(test_label_falls_back_to_index_when_unset);
+  RUN_TEST(test_wildcard_prefix_patterns);
+  RUN_TEST(test_wildcard_target_matches_any_fox);
+  RUN_TEST(test_exact_entries_take_priority_over_a_later_prefix);
   RUN_TEST(test_parse_bssid_accepts_common_separators);
   RUN_TEST(test_parse_bssid_rejects_malformed_input);
   RUN_TEST(test_bssid_only_target_matches_regardless_of_ssid);

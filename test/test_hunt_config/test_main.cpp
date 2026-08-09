@@ -257,6 +257,21 @@ void test_overlong_label_is_truncated_not_overflowed() {
   TEST_ASSERT_EQUAL_UINT32(HUNT_LABEL_MAX - 1, strlen(cfg.label[0]));
 }
 
+
+void test_wildcard_bssid_from_config() {
+  HuntConfig cfg = {};
+  const char* text =
+      "bssid = F2:2F:E4:6B:D2:9E  # 5G HARD 1\n"
+      "bssid = F2:*               # any other fox\n";
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_EQUAL_UINT8(2, cfg.bssid_count);
+  TEST_ASSERT_EQUAL_UINT8(6, cfg.prefix_len[0]);
+  TEST_ASSERT_EQUAL_UINT8(1, cfg.prefix_len[1]);
+  TEST_ASSERT_EQUAL_UINT8(0xF2, cfg.bssid[1][0]);
+  TEST_ASSERT_EQUAL_STRING("any other fox", cfg.label[1]);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -279,5 +294,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_targets_beyond_the_limit_are_reported);
   RUN_TEST(test_bssid_trailing_comment_becomes_the_label);
   RUN_TEST(test_overlong_label_is_truncated_not_overflowed);
+  RUN_TEST(test_wildcard_bssid_from_config);
   return UNITY_END();
 }

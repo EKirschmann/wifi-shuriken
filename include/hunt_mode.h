@@ -179,6 +179,8 @@ static inline bool huntLedIsOn(uint32_t now_ms, uint32_t period_ms, uint32_t on_
 
 struct HuntTarget {
   uint8_t bssid[HUNT_MAX_TARGETS][6];
+  // Leading bytes to compare, 1..6. Less than 6 is a wildcard prefix.
+  uint8_t prefix_len[HUNT_MAX_TARGETS];
   char label[HUNT_MAX_TARGETS][HUNT_LABEL_MAX];
   uint8_t bssid_count;
   char ssid[33];
@@ -204,34 +206,58 @@ static inline int huntHexNibble(char c) {
 
 // Parse "F2:22:28:43:1E:7C", "f2-22-28-43-1e-7c" or "F222284 31E7C"-style input
 // into six bytes. Returns false unless exactly twelve hex digits are present.
-static inline bool huntParseBssid(const char* text, uint8_t out[6]) {
+// Parses a full BSSID, or an octet-aligned prefix ending in '*' ("F2:*",
+// "F2:2F:*"). Returns the number of leading bytes to compare, 0 if malformed.
+//
+// A prefix is the practical way to catch foxes whose MAC you do not have:
+// every RFHS fox uses a locally-administered address, so "F2:*" matches all of
+// them, including any brought up mid-event.
+static inline uint8_t huntParseBssidPattern(const char* text, uint8_t out[6]) {
   if (text == nullptr) {
-    return false;
+    return 0;
   }
 
   uint8_t nibbles[12] = {};
   size_t count = 0;
+  bool wildcard = false;
   for (const char* p = text; *p != '\0'; p++) {
+    if (*p == '*') {
+      wildcard = true;
+      continue;
+    }
     if (*p == ':' || *p == '-' || *p == '.' || *p == ' ') {
       continue;
     }
-    const int nibble = huntHexNibble(*p);
-    if (nibble < 0) {
-      return false;
+    if (wildcard) {
+      // Hex digits after the wildcard are a typo, not a pattern.
+      return 0;
     }
-    if (count >= sizeof(nibbles)) {
-      return false;
+    const int nibble = huntHexNibble(*p);
+    if (nibble < 0 || count >= sizeof(nibbles)) {
+      return 0;
     }
     nibbles[count++] = (uint8_t)nibble;
   }
 
-  if (count != sizeof(nibbles)) {
-    return false;
+  // Whole octets only: a half-specified byte has no sensible match semantics.
+  if (count == 0 || (count % 2) != 0) {
+    return 0;
   }
-  for (size_t i = 0; i < 6; i++) {
+  // Without an explicit '*', a short address is a mistake rather than a prefix.
+  if (!wildcard && count != sizeof(nibbles)) {
+    return 0;
+  }
+
+  const uint8_t bytes = (uint8_t)(count / 2);
+  memset(out, 0, 6);
+  for (uint8_t i = 0; i < bytes; i++) {
     out[i] = (uint8_t)((nibbles[i * 2] << 4) | nibbles[(i * 2) + 1]);
   }
-  return true;
+  return bytes;
+}
+
+static inline bool huntParseBssid(const char* text, uint8_t out[6]) {
+  return huntParseBssidPattern(text, out) == 6;
 }
 
 static inline char huntLowerAscii(char c) {
@@ -260,12 +286,14 @@ static inline bool huntSsidContains(const char* haystack, const char* needle) {
 }
 
 static inline bool huntTargetAddBssid(HuntTarget& target, const uint8_t bssid[6],
-                                      const char* label = nullptr) {
-  if (target.bssid_count >= HUNT_MAX_TARGETS) {
+                                      const char* label = nullptr,
+                                      uint8_t prefix_len = 6) {
+  if (target.bssid_count >= HUNT_MAX_TARGETS || prefix_len == 0 || prefix_len > 6) {
     return false;
   }
   const uint8_t index = target.bssid_count;
   memcpy(target.bssid[index], bssid, 6);
+  target.prefix_len[index] = prefix_len;
   target.label[index][0] = '\0';
   if (label != nullptr) {
     strncpy(target.label[index], label, HUNT_LABEL_MAX - 1);
@@ -319,11 +347,40 @@ static inline int huntTargetMatchIndex(const HuntTarget& target, const WiFiResul
     return 0;
   }
   for (uint8_t i = 0; i < target.bssid_count; i++) {
-    if (memcmp(target.bssid[i], result.bssid, 6) == 0) {
+    uint8_t len = target.prefix_len[i];
+    if (len == 0 || len > 6) {
+      len = 6;
+    }
+    if (memcmp(target.bssid[i], result.bssid, len) == 0) {
       return (int)i;
     }
   }
   return -1;
+}
+
+// Renders a target as it was written: a full address, or the specified octets
+// followed by '*'.
+static inline void huntTargetFormatPattern(const HuntTarget& target, int index,
+                                           char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (index < 0 || index >= (int)target.bssid_count) {
+    return;
+  }
+  uint8_t len = target.prefix_len[index];
+  if (len == 0 || len > 6) {
+    len = 6;
+  }
+  size_t pos = 0;
+  for (uint8_t i = 0; i < len && pos + 3 < out_len; i++) {
+    pos += (size_t)snprintf(out + pos, out_len - pos, i == 0 ? "%02X" : ":%02X",
+                            target.bssid[index][i]);
+  }
+  if (len < 6 && pos + 2 < out_len) {
+    snprintf(out + pos, out_len - pos, ":*");
+  }
 }
 
 static inline bool huntTargetMatches(const HuntTarget& target, const WiFiResult& result) {

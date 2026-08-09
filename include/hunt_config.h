@@ -61,6 +61,8 @@ struct HuntConfig {
   // The trailing comment on a bssid line becomes that target's display name,
   // so the console can say "AP Hard 2" instead of a MAC or a bare index.
   char label[HUNT_MAX_TARGETS][HUNT_LABEL_MAX];
+  // Leading bytes to compare per target; less than 6 means a wildcard prefix.
+  uint8_t prefix_len[HUNT_MAX_TARGETS];
   uint8_t bssid_count;
   uint16_t bssid_dropped;
   bool ssid_seen;
@@ -198,7 +200,8 @@ static inline bool huntConfigParseLine(const char* text, size_t begin, size_t en
     char raw[32] = {};
     huntCfgCopy(text, val_begin, val_end, raw, sizeof(raw));
     uint8_t parsed[6] = {};
-    if (!huntParseBssid(raw, parsed)) {
+    const uint8_t prefix_len = huntParseBssidPattern(raw, parsed);
+    if (prefix_len == 0) {
       cfg.keys_bad++;
       return false;
     }
@@ -209,6 +212,7 @@ static inline bool huntConfigParseLine(const char* text, size_t begin, size_t en
       return false;
     }
     memcpy(cfg.bssid[cfg.bssid_count], parsed, sizeof(parsed));
+    cfg.prefix_len[cfg.bssid_count] = prefix_len;
     huntCfgCopy(text, comment_begin, comment_end,
                 cfg.label[cfg.bssid_count], HUNT_LABEL_MAX);
     cfg.bssid_count++;

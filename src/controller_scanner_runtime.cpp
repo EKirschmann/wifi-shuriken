@@ -175,7 +175,7 @@ static void huntApplySdConfig() {
   if (cfg->bssid_seen) {
     hunt_target.bssid_count = 0;
     for (uint8_t i = 0; i < cfg->bssid_count; i++) {
-      huntTargetAddBssid(hunt_target, cfg->bssid[i], cfg->label[i]);
+      huntTargetAddBssid(hunt_target, cfg->bssid[i], cfg->label[i], cfg->prefix_len[i]);
     }
   }
   if (cfg->bssid_dropped > 0) {
@@ -219,8 +219,8 @@ static void huntAnnounceConfig() {
                          hunt_target.ssid_valid ? hunt_target.ssid : "any",
                          (unsigned)HUNT_BYPASS_DEDUPE);
   for (uint8_t i = 0; i < hunt_target.bssid_count; i++) {
-    char mac[18] = {};
-    pico_logging::formatBssid(hunt_target.bssid[i], mac, sizeof(mac));
+    char mac[20] = {};
+    huntTargetFormatPattern(hunt_target, (int)i, mac, sizeof(mac));
     char label[HUNT_LABEL_MAX] = {};
     huntTargetFormatLabel(hunt_target, (int)i, label, sizeof(label));
     const HuntTargetState& st = hunt_states[i];
