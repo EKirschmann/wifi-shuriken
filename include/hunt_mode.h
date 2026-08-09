@@ -171,8 +171,15 @@ static inline bool huntLedIsOn(uint32_t now_ms, uint32_t period_ms, uint32_t on_
 #define HUNT_MAX_TARGETS 12
 #endif
 
+// A hunter should never have to map a MAC back to a fox name in their head, so
+// each target carries a human label taken from its comment in hunt.txt.
+#ifndef HUNT_LABEL_MAX
+#define HUNT_LABEL_MAX 28
+#endif
+
 struct HuntTarget {
   uint8_t bssid[HUNT_MAX_TARGETS][6];
+  char label[HUNT_MAX_TARGETS][HUNT_LABEL_MAX];
   uint8_t bssid_count;
   char ssid[33];
   bool ssid_valid;
@@ -252,13 +259,34 @@ static inline bool huntSsidContains(const char* haystack, const char* needle) {
   return false;
 }
 
-static inline bool huntTargetAddBssid(HuntTarget& target, const uint8_t bssid[6]) {
+static inline bool huntTargetAddBssid(HuntTarget& target, const uint8_t bssid[6],
+                                      const char* label = nullptr) {
   if (target.bssid_count >= HUNT_MAX_TARGETS) {
     return false;
   }
-  memcpy(target.bssid[target.bssid_count], bssid, 6);
+  const uint8_t index = target.bssid_count;
+  memcpy(target.bssid[index], bssid, 6);
+  target.label[index][0] = '\0';
+  if (label != nullptr) {
+    strncpy(target.label[index], label, HUNT_LABEL_MAX - 1);
+    target.label[index][HUNT_LABEL_MAX - 1] = '\0';
+  }
   target.bssid_count++;
   return true;
+}
+
+// Falls back to the index when a target has no label, so output is always
+// identifiable even for a bare config.
+static inline void huntTargetFormatLabel(const HuntTarget& target, int index,
+                                         char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return;
+  }
+  if (index >= 0 && index < (int)target.bssid_count && target.label[index][0] != '\0') {
+    snprintf(out, out_len, "%s", target.label[index]);
+    return;
+  }
+  snprintf(out, out_len, "#%d", index);
 }
 
 static inline HuntTarget huntTargetFromConfig() {

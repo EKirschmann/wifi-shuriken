@@ -58,6 +58,9 @@ struct HuntConfig {
   // Repeating the bssid key adds targets rather than replacing, so one card can
   // carry every fox that is live.
   uint8_t bssid[HUNT_MAX_TARGETS][6];
+  // The trailing comment on a bssid line becomes that target's display name,
+  // so the console can say "AP Hard 2" instead of a MAC or a bare index.
+  char label[HUNT_MAX_TARGETS][HUNT_LABEL_MAX];
   uint8_t bssid_count;
   uint16_t bssid_dropped;
   bool ssid_seen;
@@ -141,13 +144,20 @@ static inline bool huntCfgParseBand(const char* s, size_t begin, size_t end, uin
 // true without recording a key.
 static inline bool huntConfigParseLine(const char* text, size_t begin, size_t end,
                                        HuntConfig& cfg) {
-  // Strip comments before trimming so "bssid = X # note" works.
+  // Strip comments before trimming so "bssid = X # note" works. The comment
+  // text is kept: on a bssid line it becomes that target's label.
+  size_t comment_begin = end;
+  size_t comment_end = end;
   for (size_t i = begin; i < end; i++) {
     if (text[i] == '#' || text[i] == ';') {
+      comment_begin = i + 1;
+      comment_end = end;
       end = i;
       break;
     }
   }
+  comment_begin = huntCfgTrimStart(text, comment_begin, comment_end);
+  comment_end = huntCfgTrimEnd(text, comment_begin, comment_end);
 
   begin = huntCfgTrimStart(text, begin, end);
   end = huntCfgTrimEnd(text, begin, end);
@@ -199,6 +209,8 @@ static inline bool huntConfigParseLine(const char* text, size_t begin, size_t en
       return false;
     }
     memcpy(cfg.bssid[cfg.bssid_count], parsed, sizeof(parsed));
+    huntCfgCopy(text, comment_begin, comment_end,
+                cfg.label[cfg.bssid_count], HUNT_LABEL_MAX);
     cfg.bssid_count++;
     cfg.bssid_seen = true;
     cfg.has_bssid = true;

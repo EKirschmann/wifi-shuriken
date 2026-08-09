@@ -247,6 +247,26 @@ void test_target_list_is_capped_rather_than_overflowing() {
   TEST_ASSERT_EQUAL_INT(-1, huntTargetMatchIndex(target, makeResult("", mac, -60)));
 }
 
+
+void test_label_falls_back_to_index_when_unset() {
+  HuntTarget target = {};
+  uint8_t a[6] = {};
+  uint8_t b[6] = {};
+  TEST_ASSERT_TRUE(huntParseBssid("F2:EE:CB:62:E8:77", a));
+  TEST_ASSERT_TRUE(huntParseBssid("F2:2F:E4:6B:D2:9E", b));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, a, "AP Easy 1"));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, b));
+
+  char out[HUNT_LABEL_MAX] = {};
+  huntTargetFormatLabel(target, 0, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("AP Easy 1", out);
+  huntTargetFormatLabel(target, 1, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("#1", out);
+  // Out of range must not read past the array.
+  huntTargetFormatLabel(target, 9, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("#9", out);
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -258,6 +278,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_bar_and_led_agree_on_direction);
   RUN_TEST(test_multi_target_match_reports_the_right_index);
   RUN_TEST(test_target_list_is_capped_rather_than_overflowing);
+  RUN_TEST(test_label_falls_back_to_index_when_unset);
   RUN_TEST(test_parse_bssid_accepts_common_separators);
   RUN_TEST(test_parse_bssid_rejects_malformed_input);
   RUN_TEST(test_bssid_only_target_matches_regardless_of_ssid);

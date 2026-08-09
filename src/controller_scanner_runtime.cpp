@@ -175,7 +175,7 @@ static void huntApplySdConfig() {
   if (cfg->bssid_seen) {
     hunt_target.bssid_count = 0;
     for (uint8_t i = 0; i < cfg->bssid_count; i++) {
-      huntTargetAddBssid(hunt_target, cfg->bssid[i]);
+      huntTargetAddBssid(hunt_target, cfg->bssid[i], cfg->label[i]);
     }
   }
   if (cfg->bssid_dropped > 0) {
@@ -221,12 +221,14 @@ static void huntAnnounceConfig() {
   for (uint8_t i = 0; i < hunt_target.bssid_count; i++) {
     char mac[18] = {};
     pico_logging::formatBssid(hunt_target.bssid[i], mac, sizeof(mac));
+    char label[HUNT_LABEL_MAX] = {};
+    huntTargetFormatLabel(hunt_target, (int)i, label, sizeof(label));
     const HuntTargetState& st = hunt_states[i];
     if (st.seen) {
-      scannerSerialPrintfTry("[HUNT]   #%u %s  seen hits=%lu best=%d\n",
-                             (unsigned)i, mac, (unsigned long)st.hits, (int)st.best_rssi);
+      scannerSerialPrintfTry("[HUNT]   %-24s %s  SEEN hits=%lu best=%d\n",
+                             label, mac, (unsigned long)st.hits, (int)st.best_rssi);
     } else {
-      scannerSerialPrintfTry("[HUNT]   #%u %s  not seen yet\n", (unsigned)i, mac);
+      scannerSerialPrintfTry("[HUNT]   %-24s %s  --\n", label, mac);
     }
   }
   if (hunt_target.bssid_count == 0) {
@@ -270,8 +272,10 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result, int i
   if (first) {
     char mac[18] = {};
     pico_logging::formatBssid(result.bssid, mac, sizeof(mac));
-    scannerSerialPrintfTry("[HUNT] ACQUIRED #%u bssid=%s ssid='%s' ch=%u band=%u rssi=%d\n",
-                           (unsigned)index,
+    char acq_label[HUNT_LABEL_MAX] = {};
+    huntTargetFormatLabel(hunt_target, index, acq_label, sizeof(acq_label));
+    scannerSerialPrintfTry("[HUNT] *** ACQUIRED %s *** bssid=%s ssid='%s' ch=%u band=%u rssi=%d\n",
+                           acq_label,
                            mac,
                            result.ssid,
                            (unsigned)result.channel,
@@ -289,8 +293,10 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result, int i
     trend = (result.rssi > prev_rssi) ? '+' : ((result.rssi < prev_rssi) ? '-' : '=');
   }
 
-  scannerSerialPrintfTry("[HUNT] #%u %c rssi=%-4d best=%-4d ch=%-3u hits=%-5lu gap=%-7s [%s] S%u\n",
-                         (unsigned)index,
+  char label[HUNT_LABEL_MAX] = {};
+  huntTargetFormatLabel(hunt_target, index, label, sizeof(label));
+  scannerSerialPrintfTry("[HUNT] %-20s %c rssi=%-4d best=%-4d ch=%-3u hits=%-5lu gap=%-7s [%s] S%u\n",
+                         label,
                          trend,
                          (int)result.rssi,
                          (int)state.best_rssi,
@@ -343,8 +349,10 @@ static void huntServiceIdleNotice() {
 
   char gap[16] = {};
   huntFormatElapsed(now - state.last_seen_ms, gap, sizeof(gap));
-  scannerSerialPrintfTry("[HUNT] #%d . no contact for %s (last rssi=%d best=%d hits=%lu)\n",
-                         hunt_last_index,
+  char label[HUNT_LABEL_MAX] = {};
+  huntTargetFormatLabel(hunt_target, hunt_last_index, label, sizeof(label));
+  scannerSerialPrintfTry("[HUNT] %-20s . no contact for %s (last rssi=%d best=%d hits=%lu)\n",
+                         label,
                          gap,
                          (int)state.last_rssi,
                          (int)state.best_rssi,

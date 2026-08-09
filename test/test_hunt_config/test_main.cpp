@@ -231,6 +231,32 @@ void test_targets_beyond_the_limit_are_reported() {
   TEST_ASSERT_EQUAL_UINT16(2, cfg.keys_bad);
 }
 
+
+// The comment on a bssid line is the fox's name on the console. Losing it
+// would put the hunter back to memorising MAC addresses.
+void test_bssid_trailing_comment_becomes_the_label() {
+  HuntConfig cfg = {};
+  const char* text =
+      "bssid = F2:C8:7F:C2:94:C4   # AP HARD 2 (450)\n"
+      "bssid = F2:2F:E4:6B:D2:9E ; 5G HARD 1 (550)\n"
+      "bssid = F2:EE:CB:62:E8:77\n";
+
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_EQUAL_UINT8(3, cfg.bssid_count);
+  TEST_ASSERT_EQUAL_STRING("AP HARD 2 (450)", cfg.label[0]);
+  TEST_ASSERT_EQUAL_STRING("5G HARD 1 (550)", cfg.label[1]);
+  // No comment leaves an empty label; callers fall back to the index.
+  TEST_ASSERT_EQUAL_STRING("", cfg.label[2]);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+}
+
+void test_overlong_label_is_truncated_not_overflowed() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("bssid = F2:2F:E4:6B:D2:9E # "
+                         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", cfg));
+  TEST_ASSERT_EQUAL_UINT32(HUNT_LABEL_MAX - 1, strlen(cfg.label[0]));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -251,5 +277,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_multiple_bssid_lines_accumulate_targets);
   RUN_TEST(test_blank_bssid_clears_the_whole_list);
   RUN_TEST(test_targets_beyond_the_limit_are_reported);
+  RUN_TEST(test_bssid_trailing_comment_becomes_the_label);
+  RUN_TEST(test_overlong_label_is_truncated_not_overflowed);
   return UNITY_END();
 }
