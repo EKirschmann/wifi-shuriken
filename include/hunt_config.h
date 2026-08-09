@@ -28,6 +28,8 @@
 // band accepts: 2.4 | 24 | 2 -> 2.4GHz sweep
 //               5 | 5g       -> 5GHz sweep
 //               all | both   -> full dual-band sweep
+//               fox         -> both bands, fox channels only (fastest
+//                              useful sweep: skips 2.4GHz 12-14 and DFS)
 //               default      -> keep the plan the firmware was built with
 
 #ifndef HUNT_CONFIG_PATH
@@ -47,6 +49,7 @@ enum HuntBandSelect : uint8_t {
   HUNT_BAND_24GHZ = 1,
   HUNT_BAND_5GHZ = 2,
   HUNT_BAND_ALL = 3,
+  HUNT_BAND_FOX = 4,
 };
 
 struct HuntConfig {
@@ -132,6 +135,11 @@ static inline bool huntCfgParseBand(const char* s, size_t begin, size_t end, uin
   if (huntCfgEquals(s, begin, end, "all") || huntCfgEquals(s, begin, end, "both") ||
       huntCfgEquals(s, begin, end, "full") || huntCfgEquals(s, begin, end, "dual")) {
     out = HUNT_BAND_ALL;
+    return true;
+  }
+  if (huntCfgEquals(s, begin, end, "fox") || huntCfgEquals(s, begin, end, "foxall") ||
+      huntCfgEquals(s, begin, end, "fox-all") || huntCfgEquals(s, begin, end, "hunt")) {
+    out = HUNT_BAND_FOX;
     return true;
   }
   if (huntCfgEquals(s, begin, end, "default") || huntCfgEquals(s, begin, end, "auto")) {
@@ -279,6 +287,8 @@ static inline ChannelPlan huntConfigChannelPlan(const HuntConfig& cfg) {
       return channelPlan5gFox();
     case HUNT_BAND_ALL:
       return channelPlanFull();
+    case HUNT_BAND_FOX:
+      return channelPlanFoxAll();
     default:
       return channelPlanDefault();
   }
@@ -289,6 +299,7 @@ static inline const char* huntConfigBandName(uint8_t band) {
     case HUNT_BAND_24GHZ: return "2.4GHz";
     case HUNT_BAND_5GHZ: return "5GHz";
     case HUNT_BAND_ALL: return "all";
+    case HUNT_BAND_FOX: return "fox (both bands, fox channels)";
     default: return "built-in default";
   }
 }

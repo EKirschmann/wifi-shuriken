@@ -64,6 +64,11 @@ static constexpr uint8_t CHANNEL_PHASES_MIXED[] = {
 };
 static constexpr uint8_t CHANNEL_PHASES_24G_ONLY[] = { WIFI_BAND_24_GHZ };
 static constexpr uint8_t CHANNEL_PHASES_5G_ONLY[] = { WIFI_BAND_5_GHZ };
+// Straight alternation suits two lists of similar length, which is the case
+// once both bands are cut down to just the channels a fox can use.
+static constexpr uint8_t CHANNEL_PHASES_ALTERNATING[] = {
+  WIFI_BAND_24_GHZ, WIFI_BAND_5_GHZ
+};
 
 // Full dual-band coverage sweep. This is what wardriving builds want.
 static inline ChannelPlan channelPlanFull() {
@@ -97,18 +102,34 @@ static inline ChannelPlan channelPlan5gFox() {
   return plan;
 }
 
+// Both bands, but only the channels a fox can actually occupy. Skips 2.4GHz
+// 12-14 and every DFS channel -- 19 of the 39 in a full sweep, and the DFS ones
+// cost a 210ms passive dwell each -- so a cycle is roughly 2.4x faster than
+// full dual-band coverage while losing nothing a fox could be found on.
+static inline ChannelPlan channelPlanFoxAll() {
+  ChannelPlan plan = channelPlanFull();
+  plan.list_24g = CHANNEL_LIST_24G_FOX;
+  plan.count_24g = sizeof(CHANNEL_LIST_24G_FOX) / sizeof(CHANNEL_LIST_24G_FOX[0]);
+  plan.list_5g = CHANNEL_LIST_5G_FOX;
+  plan.count_5g = sizeof(CHANNEL_LIST_5G_FOX) / sizeof(CHANNEL_LIST_5G_FOX[0]);
+  plan.phase_bands = CHANNEL_PHASES_ALTERNATING;
+  plan.phase_count = sizeof(CHANNEL_PHASES_ALTERNATING) / sizeof(CHANNEL_PHASES_ALTERNATING[0]);
+  return plan;
+}
+
 // CHANNEL_PLAN picks the plan a build starts with. Hunt builds can still be
 // re-pointed at runtime from the SD card, so this is a default rather than a
 // hard restriction.
 //   0 = full dual-band coverage sweep (wardriving default)
 //   1 = 2.4GHz fox sweep
 //   2 = 5GHz fox sweep
+//   3 = both bands, fox channels only
 #ifndef CHANNEL_PLAN
 #define CHANNEL_PLAN 0
 #endif
 
-#if CHANNEL_PLAN != 0 && CHANNEL_PLAN != 1 && CHANNEL_PLAN != 2
-#error "CHANNEL_PLAN must be 0 (full), 1 (2.4GHz fox), or 2 (5GHz fox)"
+#if CHANNEL_PLAN < 0 || CHANNEL_PLAN > 3
+#error "CHANNEL_PLAN must be 0 (full), 1 (2.4GHz fox), 2 (5GHz fox), or 3 (both, fox channels)"
 #endif
 
 static inline ChannelPlan channelPlanDefault() {
@@ -116,6 +137,8 @@ static inline ChannelPlan channelPlanDefault() {
   return channelPlan24gFox();
 #elif CHANNEL_PLAN == 2
   return channelPlan5gFox();
+#elif CHANNEL_PLAN == 3
+  return channelPlanFoxAll();
 #else
   return channelPlanFull();
 #endif
@@ -192,6 +215,8 @@ static constexpr uint8_t CHANNEL_SCHEDULE_PHASE_COUNT =
   (uint8_t)(sizeof(CHANNEL_PHASES_24G_ONLY) / sizeof(CHANNEL_PHASES_24G_ONLY[0]));
 #elif CHANNEL_PLAN == 2
   (uint8_t)(sizeof(CHANNEL_PHASES_5G_ONLY) / sizeof(CHANNEL_PHASES_5G_ONLY[0]));
+#elif CHANNEL_PLAN == 3
+  (uint8_t)(sizeof(CHANNEL_PHASES_ALTERNATING) / sizeof(CHANNEL_PHASES_ALTERNATING[0]));
 #else
   (uint8_t)(sizeof(CHANNEL_PHASES_MIXED) / sizeof(CHANNEL_PHASES_MIXED[0]));
 #endif

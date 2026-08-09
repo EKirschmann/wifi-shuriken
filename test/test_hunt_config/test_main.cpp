@@ -62,6 +62,8 @@ void test_band_aliases() {
     {"2.4GHz", HUNT_BAND_24GHZ}, {"2g", HUNT_BAND_24GHZ},
     {"5", HUNT_BAND_5GHZ}, {"5g", HUNT_BAND_5GHZ}, {"5GHZ", HUNT_BAND_5GHZ},
     {"all", HUNT_BAND_ALL}, {"both", HUNT_BAND_ALL}, {"full", HUNT_BAND_ALL},
+    {"fox", HUNT_BAND_FOX}, {"FOX", HUNT_BAND_FOX}, {"foxall", HUNT_BAND_FOX},
+    {"hunt", HUNT_BAND_FOX},
     {"default", HUNT_BAND_KEEP_DEFAULT}, {"auto", HUNT_BAND_KEEP_DEFAULT},
   };
 
@@ -272,6 +274,48 @@ void test_wildcard_bssid_from_config() {
   TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
 }
 
+
+// The fox plan must keep both bands but drop every channel no fox can use:
+// 2.4GHz 12-14 and all of DFS. Losing a usable channel here would make a fox
+// invisible; keeping a useless one just wastes dwell.
+void test_fox_plan_covers_exactly_the_fox_channels() {
+  HuntConfig cfg = {};
+  cfg.band = HUNT_BAND_FOX;
+  const ChannelPlan plan = huntConfigChannelPlan(cfg);
+
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_24_GHZ));
+  TEST_ASSERT_TRUE(channelPlanUsesBand(plan, WIFI_BAND_5_GHZ));
+  TEST_ASSERT_EQUAL_UINT32(11, plan.count_24g);
+  TEST_ASSERT_EQUAL_UINT32(9, plan.count_5g);
+
+  for (size_t i = 0; i < plan.count_24g; i++) {
+    TEST_ASSERT_TRUE(plan.list_24g[i] >= 1 && plan.list_24g[i] <= 11);
+  }
+  for (size_t i = 0; i < plan.count_5g; i++) {
+    const uint8_t ch = plan.list_5g[i];
+    TEST_ASSERT_FALSE(ch >= 52 && ch <= 144);   // no DFS: 210ms dwell for nothing
+  }
+
+  // A cycle must still complete and visit every channel in both lists.
+  ChannelScheduleState state = {};
+  uint8_t seen24[16] = {};
+  uint8_t seen5[200] = {};
+  bool done = false;
+  uint32_t n = 0;
+  while (!done && n < 256) {
+    const ChannelScheduleEntry e = channelScheduleCurrent(plan, state);
+    if (e.band == WIFI_BAND_24_GHZ) seen24[e.channel]++; else seen5[e.channel]++;
+    done = channelScheduleAdvance(plan, state);
+    n++;
+  }
+  TEST_ASSERT_TRUE(done);
+  for (size_t i = 0; i < plan.count_24g; i++) TEST_ASSERT_TRUE(seen24[plan.list_24g[i]] >= 1);
+  for (size_t i = 0; i < plan.count_5g; i++) TEST_ASSERT_TRUE(seen5[plan.list_5g[i]] >= 1);
+
+  // And it must be materially cheaper than full coverage, which is the point.
+  TEST_ASSERT_TRUE(n < 30);
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -295,5 +339,6 @@ int main(int argc, char** argv) {
   RUN_TEST(test_bssid_trailing_comment_becomes_the_label);
   RUN_TEST(test_overlong_label_is_truncated_not_overflowed);
   RUN_TEST(test_wildcard_bssid_from_config);
+  RUN_TEST(test_fox_plan_covers_exactly_the_fox_channels);
   return UNITY_END();
 }
