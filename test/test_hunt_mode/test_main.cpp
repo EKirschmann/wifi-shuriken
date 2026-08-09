@@ -53,8 +53,9 @@ void test_parse_bssid_rejects_malformed_input() {
 
 void test_bssid_only_target_matches_regardless_of_ssid() {
   HuntTarget target = {};
-  target.bssid_valid = huntParseBssid("F2:2F:E4:6B:D2:9E", target.bssid);
-  TEST_ASSERT_TRUE(target.bssid_valid);
+  uint8_t parsed[6] = {};
+  TEST_ASSERT_TRUE(huntParseBssid("F2:2F:E4:6B:D2:9E", parsed));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, parsed));
   TEST_ASSERT_TRUE(huntTargetIsConfigured(target));
 
   // A team spoofing the SSID on a different radio must not be chased.
@@ -83,7 +84,9 @@ void test_ssid_substring_match_is_case_insensitive() {
 
 void test_both_filters_are_required_when_both_configured() {
   HuntTarget target = {};
-  target.bssid_valid = huntParseBssid("F2:2F:E4:6B:D2:9E", target.bssid);
+  uint8_t parsed[6] = {};
+  TEST_ASSERT_TRUE(huntParseBssid("F2:2F:E4:6B:D2:9E", parsed));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, parsed));
   strncpy(target.ssid, "Hard Fox", sizeof(target.ssid) - 1);
   target.ssid_valid = true;
 
@@ -215,6 +218,35 @@ void test_bar_and_led_agree_on_direction() {
   TEST_ASSERT_TRUE(huntLedBrightness(-40) > huntLedBrightness(-90));
 }
 
+
+void test_multi_target_match_reports_the_right_index() {
+  HuntTarget target = {};
+  uint8_t a[6] = {};
+  uint8_t b[6] = {};
+  TEST_ASSERT_TRUE(huntParseBssid("F2:EE:CB:62:E8:77", a));
+  TEST_ASSERT_TRUE(huntParseBssid("F2:2F:E4:6B:D2:9E", b));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, a));
+  TEST_ASSERT_TRUE(huntTargetAddBssid(target, b));
+  TEST_ASSERT_EQUAL_UINT8(2, target.bssid_count);
+
+  TEST_ASSERT_EQUAL_INT(0, huntTargetMatchIndex(target, makeResult("", a, -60)));
+  TEST_ASSERT_EQUAL_INT(1, huntTargetMatchIndex(target, makeResult("", b, -60)));
+  TEST_ASSERT_EQUAL_INT(-1, huntTargetMatchIndex(target, makeResult("", OTHER_BSSID, -60)));
+}
+
+void test_target_list_is_capped_rather_than_overflowing() {
+  HuntTarget target = {};
+  uint8_t mac[6] = {0xF2, 0, 0, 0, 0, 0};
+  for (int i = 0; i < HUNT_MAX_TARGETS; i++) {
+    mac[5] = (uint8_t)i;
+    TEST_ASSERT_TRUE(huntTargetAddBssid(target, mac));
+  }
+  mac[5] = 0xFF;
+  TEST_ASSERT_FALSE(huntTargetAddBssid(target, mac));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_MAX_TARGETS, target.bssid_count);
+  TEST_ASSERT_EQUAL_INT(-1, huntTargetMatchIndex(target, makeResult("", mac, -60)));
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -224,6 +256,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_led_brightness_rises_with_signal);
   RUN_TEST(test_led_blink_duty_cycle);
   RUN_TEST(test_bar_and_led_agree_on_direction);
+  RUN_TEST(test_multi_target_match_reports_the_right_index);
+  RUN_TEST(test_target_list_is_capped_rather_than_overflowing);
   RUN_TEST(test_parse_bssid_accepts_common_separators);
   RUN_TEST(test_parse_bssid_rejects_malformed_input);
   RUN_TEST(test_bssid_only_target_matches_regardless_of_ssid);

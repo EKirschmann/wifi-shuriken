@@ -157,7 +157,10 @@ static void scannerSerialPrintfTry(const char* fmt, ...) {
 // Hunt mode tracks exactly one target. Both live on core1 alongside the rest of
 // the scanner runtime state.
 static HuntTarget hunt_target = {};
-static HuntTargetState hunt_state = {};
+static HuntTargetState hunt_states[HUNT_MAX_TARGETS] = {};
+// Index of the most recently seen target; the idle heartbeat and the LED both
+// follow it so a multi-target hunt still has one thing to walk toward.
+static int hunt_last_index = -1;
 static uint32_t hunt_next_announce_ms = 0;
 
 // Applies overrides parsed from the SD card on core0. Only hunt builds consult
@@ -170,12 +173,14 @@ static void huntApplySdConfig() {
   }
 
   if (cfg->bssid_seen) {
-    if (cfg->has_bssid) {
-      memcpy(hunt_target.bssid, cfg->bssid, sizeof(hunt_target.bssid));
-      hunt_target.bssid_valid = true;
-    } else {
-      hunt_target.bssid_valid = false;
+    hunt_target.bssid_count = 0;
+    for (uint8_t i = 0; i < cfg->bssid_count; i++) {
+      huntTargetAddBssid(hunt_target, cfg->bssid[i]);
     }
+  }
+  if (cfg->bssid_dropped > 0) {
+    scannerSerialPrintfTry("[HUNT] WARNING: %u target(s) beyond the limit of %u were ignored\n",
+                           (unsigned)cfg->bssid_dropped, (unsigned)HUNT_MAX_TARGETS);
   }
 
   if (cfg->ssid_seen) {
@@ -209,16 +214,24 @@ static void huntAnnounceConfig() {
     return;
   }
 
-  char mac[18] = {};
-  if (hunt_target.bssid_valid) {
-    pico_logging::formatBssid(hunt_target.bssid, mac, sizeof(mac));
-  } else {
-    strncpy(mac, "any", sizeof(mac) - 1);
-  }
-  scannerSerialPrintfTry("[HUNT] hunting bssid=%s ssid~='%s' dedupe_bypass=%u\n",
-                         mac,
+  scannerSerialPrintfTry("[HUNT] hunting %u target(s) ssid~='%s' dedupe_bypass=%u\n",
+                         (unsigned)hunt_target.bssid_count,
                          hunt_target.ssid_valid ? hunt_target.ssid : "any",
                          (unsigned)HUNT_BYPASS_DEDUPE);
+  for (uint8_t i = 0; i < hunt_target.bssid_count; i++) {
+    char mac[18] = {};
+    pico_logging::formatBssid(hunt_target.bssid[i], mac, sizeof(mac));
+    const HuntTargetState& st = hunt_states[i];
+    if (st.seen) {
+      scannerSerialPrintfTry("[HUNT]   #%u %s  seen hits=%lu best=%d\n",
+                             (unsigned)i, mac, (unsigned long)st.hits, (int)st.best_rssi);
+    } else {
+      scannerSerialPrintfTry("[HUNT]   #%u %s  not seen yet\n", (unsigned)i, mac);
+    }
+  }
+  if (hunt_target.bssid_count == 0) {
+    scannerSerialPrintlnTry("[HUNT]   (no BSSIDs set; matching on SSID substring only)");
+  }
 
   // Report the sweep actually in force so a mis-set band is obvious at boot
   // rather than looking like an absent fox.
@@ -231,12 +244,17 @@ static void huntAnnounceConfig() {
                          (unsigned)(uses_5g ? scanner_channel_plan.count_5g : 0));
 }
 
-static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
+static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result, int index) {
+  if (index < 0 || index >= HUNT_MAX_TARGETS) {
+    return;
+  }
+  HuntTargetState& state = hunt_states[index];
   const uint32_t now = millis();
-  const bool first = !hunt_state.seen;
-  const uint32_t gap_ms = first ? 0u : (now - hunt_state.last_seen_ms);
-  const int8_t prev_rssi = hunt_state.last_rssi;
-  huntStateNoteHit(hunt_state, result.rssi, now);
+  const bool first = !state.seen;
+  const uint32_t gap_ms = first ? 0u : (now - state.last_seen_ms);
+  const int8_t prev_rssi = state.last_rssi;
+  huntStateNoteHit(state, result.rssi, now);
+  hunt_last_index = index;
 
   // Publish to core0 for the LED. RSSI first so the timestamp never advertises
   // a reading that has not landed yet.
@@ -252,7 +270,8 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
   if (first) {
     char mac[18] = {};
     pico_logging::formatBssid(result.bssid, mac, sizeof(mac));
-    scannerSerialPrintfTry("[HUNT] ACQUIRED bssid=%s ssid='%s' ch=%u band=%u rssi=%d\n",
+    scannerSerialPrintfTry("[HUNT] ACQUIRED #%u bssid=%s ssid='%s' ch=%u band=%u rssi=%d\n",
+                           (unsigned)index,
                            mac,
                            result.ssid,
                            (unsigned)result.channel,
@@ -270,12 +289,13 @@ static void huntNoteTargetSighting(uint8_t slot, const WiFiResult& result) {
     trend = (result.rssi > prev_rssi) ? '+' : ((result.rssi < prev_rssi) ? '-' : '=');
   }
 
-  scannerSerialPrintfTry("[HUNT] %c rssi=%-4d best=%-4d ch=%-3u hits=%-5lu gap=%-7s [%s] S%u\n",
+  scannerSerialPrintfTry("[HUNT] #%u %c rssi=%-4d best=%-4d ch=%-3u hits=%-5lu gap=%-7s [%s] S%u\n",
+                         (unsigned)index,
                          trend,
                          (int)result.rssi,
-                         (int)hunt_state.best_rssi,
+                         (int)state.best_rssi,
                          (unsigned)result.channel,
-                         (unsigned long)hunt_state.hits,
+                         (unsigned long)state.hits,
                          gap,
                          bar,
                          (unsigned)slot);
@@ -306,22 +326,29 @@ static void huntServicePeriodicAnnounce() {
 // console is distinguishable from a sleeping fox.
 static void huntServiceIdleNotice() {
 #if HUNT_IDLE_NOTICE_MS > 0
-  if (!hunt_state.seen) {
+  // Only the most recently seen target gets a heartbeat; one line per interval
+  // stays readable when several foxes are being hunted at once.
+  if (hunt_last_index < 0) {
+    return;
+  }
+  HuntTargetState& state = hunt_states[hunt_last_index];
+  if (!state.seen) {
     return;
   }
   const uint32_t now = millis();
-  if ((uint32_t)(now - hunt_state.last_idle_notice_ms) < (uint32_t)HUNT_IDLE_NOTICE_MS) {
+  if ((uint32_t)(now - state.last_idle_notice_ms) < (uint32_t)HUNT_IDLE_NOTICE_MS) {
     return;
   }
-  hunt_state.last_idle_notice_ms = now;
+  state.last_idle_notice_ms = now;
 
   char gap[16] = {};
-  huntFormatElapsed(now - hunt_state.last_seen_ms, gap, sizeof(gap));
-  scannerSerialPrintfTry("[HUNT] . no contact for %s (last rssi=%d best=%d hits=%lu)\n",
+  huntFormatElapsed(now - state.last_seen_ms, gap, sizeof(gap));
+  scannerSerialPrintfTry("[HUNT] #%d . no contact for %s (last rssi=%d best=%d hits=%lu)\n",
+                         hunt_last_index,
                          gap,
-                         (int)hunt_state.last_rssi,
-                         (int)hunt_state.best_rssi,
-                         (unsigned long)hunt_state.hits);
+                         (int)state.last_rssi,
+                         (int)state.best_rssi,
+                         (unsigned long)state.hits);
 #endif
 }
 #endif  // HUNT_MODE_ENABLED
@@ -1527,11 +1554,11 @@ static void processScannerSlot(uint8_t slot,
       }
 
 #if HUNT_MODE_ENABLED
-      const bool hunt_match = huntTargetMatches(hunt_target, pkt.result);
-      if (hunt_match) {
-        huntNoteTargetSighting(slot, pkt.result);
+      const int hunt_index = huntTargetMatchIndex(hunt_target, pkt.result);
+      if (hunt_index >= 0) {
+        huntNoteTargetSighting(slot, pkt.result, hunt_index);
       }
-      const bool hunt_keep_duplicate = hunt_match && (HUNT_BYPASS_DEDUPE != 0);
+      const bool hunt_keep_duplicate = (hunt_index >= 0) && (HUNT_BYPASS_DEDUPE != 0);
 #else
       const bool hunt_keep_duplicate = false;
 #endif

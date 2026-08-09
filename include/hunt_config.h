@@ -55,7 +55,11 @@ struct HuntConfig {
   // filter". has_* records that a usable value was set.
   bool bssid_seen;
   bool has_bssid;
-  uint8_t bssid[6];
+  // Repeating the bssid key adds targets rather than replacing, so one card can
+  // carry every fox that is live.
+  uint8_t bssid[HUNT_MAX_TARGETS][6];
+  uint8_t bssid_count;
+  uint16_t bssid_dropped;
   bool ssid_seen;
   bool has_ssid;
   char ssid[33];
@@ -173,18 +177,29 @@ static inline bool huntConfigParseLine(const char* text, size_t begin, size_t en
       huntCfgEquals(text, key_begin, key_end, "mac") ||
       huntCfgEquals(text, key_begin, key_end, "target")) {
     if (value_empty) {
-      // An explicitly blank value clears the filter rather than being an error.
+      // An explicitly blank value clears the whole list rather than being an
+      // error, which is how a BSSID baked in at build time gets dropped.
       cfg.bssid_seen = true;
       cfg.has_bssid = false;
+      cfg.bssid_count = 0;
       cfg.keys_ok++;
       return true;
     }
     char raw[32] = {};
     huntCfgCopy(text, val_begin, val_end, raw, sizeof(raw));
-    if (!huntParseBssid(raw, cfg.bssid)) {
+    uint8_t parsed[6] = {};
+    if (!huntParseBssid(raw, parsed)) {
       cfg.keys_bad++;
       return false;
     }
+    if (cfg.bssid_count >= HUNT_MAX_TARGETS) {
+      // Report rather than silently hunting a subset of the list.
+      cfg.bssid_dropped++;
+      cfg.keys_bad++;
+      return false;
+    }
+    memcpy(cfg.bssid[cfg.bssid_count], parsed, sizeof(parsed));
+    cfg.bssid_count++;
     cfg.bssid_seen = true;
     cfg.has_bssid = true;
     cfg.keys_ok++;

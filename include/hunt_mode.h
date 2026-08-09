@@ -164,9 +164,16 @@ static inline bool huntLedIsOn(uint32_t now_ms, uint32_t period_ms, uint32_t on_
   return (now_ms % period_ms) < on_ms;
 }
 
+// Several foxes are usually live at once across both bands. Hunting them one
+// at a time means one pass per fox; carrying the whole list means one pass
+// total, which is why the target is a set rather than a single BSSID.
+#ifndef HUNT_MAX_TARGETS
+#define HUNT_MAX_TARGETS 12
+#endif
+
 struct HuntTarget {
-  uint8_t bssid[6];
-  bool bssid_valid;
+  uint8_t bssid[HUNT_MAX_TARGETS][6];
+  uint8_t bssid_count;
   char ssid[33];
   bool ssid_valid;
 };
@@ -245,31 +252,54 @@ static inline bool huntSsidContains(const char* haystack, const char* needle) {
   return false;
 }
 
+static inline bool huntTargetAddBssid(HuntTarget& target, const uint8_t bssid[6]) {
+  if (target.bssid_count >= HUNT_MAX_TARGETS) {
+    return false;
+  }
+  memcpy(target.bssid[target.bssid_count], bssid, 6);
+  target.bssid_count++;
+  return true;
+}
+
 static inline HuntTarget huntTargetFromConfig() {
   HuntTarget target = {};
-  target.bssid_valid = huntParseBssid(HUNT_TARGET_BSSID, target.bssid);
+  uint8_t bssid[6] = {};
+  if (huntParseBssid(HUNT_TARGET_BSSID, bssid)) {
+    huntTargetAddBssid(target, bssid);
+  }
   strncpy(target.ssid, HUNT_TARGET_SSID, sizeof(target.ssid) - 1);
   target.ssid_valid = (target.ssid[0] != '\0');
   return target;
 }
 
 static inline bool huntTargetIsConfigured(const HuntTarget& target) {
-  return target.bssid_valid || target.ssid_valid;
+  return target.bssid_count > 0 || target.ssid_valid;
 }
 
-// Both configured filters must match. With only a BSSID set this is a pure
-// BSSID match, which is the recommended configuration.
-static inline bool huntTargetMatches(const HuntTarget& target, const WiFiResult& result) {
+// Returns the index of the matching target, or -1. Both configured filters
+// must pass: with only BSSIDs set this is a pure BSSID match, which is the
+// recommended configuration. With no BSSIDs at all, an SSID match reports
+// index 0 so callers can treat it as a single anonymous target.
+static inline int huntTargetMatchIndex(const HuntTarget& target, const WiFiResult& result) {
   if (!huntTargetIsConfigured(target)) {
-    return false;
-  }
-  if (target.bssid_valid && memcmp(target.bssid, result.bssid, sizeof(target.bssid)) != 0) {
-    return false;
+    return -1;
   }
   if (target.ssid_valid && !huntSsidContains(result.ssid, target.ssid)) {
-    return false;
+    return -1;
   }
-  return true;
+  if (target.bssid_count == 0) {
+    return 0;
+  }
+  for (uint8_t i = 0; i < target.bssid_count; i++) {
+    if (memcmp(target.bssid[i], result.bssid, 6) == 0) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+static inline bool huntTargetMatches(const HuntTarget& target, const WiFiResult& result) {
+  return huntTargetMatchIndex(target, result) >= 0;
 }
 
 static inline void huntStateNoteHit(HuntTargetState& state, int8_t rssi, uint32_t now_ms) {

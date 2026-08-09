@@ -24,7 +24,7 @@ void test_parses_a_typical_config_file() {
 
   TEST_ASSERT_TRUE(parse(text, cfg));
   TEST_ASSERT_TRUE(cfg.has_bssid);
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid[0], 6);
   TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_5GHZ, cfg.band);
   TEST_ASSERT_EQUAL_UINT16(2, cfg.keys_ok);
   TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
@@ -42,7 +42,7 @@ void test_tolerates_crlf_blank_lines_and_comment_styles() {
 
   TEST_ASSERT_TRUE(parse(text, cfg));
   TEST_ASSERT_TRUE(cfg.has_bssid);
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid[0], 6);
   TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_5GHZ, cfg.band);
   TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
 }
@@ -51,7 +51,7 @@ void test_keys_and_band_values_are_case_insensitive() {
   HuntConfig cfg = {};
   TEST_ASSERT_TRUE(parse("BSSID=f2:2f:e4:6b:d2:9e\nBAND=ALL\n", cfg));
   TEST_ASSERT_TRUE(cfg.has_bssid);
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid[0], 6);
   TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_ALL, cfg.band);
 }
 
@@ -78,11 +78,11 @@ void test_band_aliases() {
 void test_bssid_aliases_and_separator_forms() {
   HuntConfig cfg = {};
   TEST_ASSERT_TRUE(parse("mac = f2-2f-e4-6b-d2-9e\n", cfg));
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid[0], 6);
 
   HuntConfig bare = {};
   TEST_ASSERT_TRUE(parse("target = F22FE46BD29E\n", bare));
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, bare.bssid, 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, bare.bssid[0], 6);
 }
 
 void test_ssid_is_captured_verbatim_including_spaces() {
@@ -180,6 +180,57 @@ void test_band_maps_onto_the_expected_sweep_plan() {
   TEST_ASSERT_EQUAL_UINT32(25, plan.count_5g);
 }
 
+
+// Several foxes are usually live at once, so repeating the key has to add a
+// target rather than replace the previous one.
+void test_multiple_bssid_lines_accumulate_targets() {
+  HuntConfig cfg = {};
+  const char* text =
+      "band  = all\n"
+      "bssid = F2:EE:CB:62:E8:77\n"
+      "bssid = F2:1D:D5:EA:5D:16\n"
+      "mac   = F2:2F:E4:6B:D2:9E\n";
+
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_EQUAL_UINT8(3, cfg.bssid_count);
+  TEST_ASSERT_TRUE(cfg.has_bssid);
+
+  const uint8_t first[6]  = {0xF2, 0xEE, 0xCB, 0x62, 0xE8, 0x77};
+  const uint8_t second[6] = {0xF2, 0x1D, 0xD5, 0xEA, 0x5D, 0x16};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(first, cfg.bssid[0], 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(second, cfg.bssid[1], 6);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(FOX_5G, cfg.bssid[2], 6);
+  TEST_ASSERT_EQUAL_UINT8(HUNT_BAND_ALL, cfg.band);
+  TEST_ASSERT_EQUAL_UINT16(0, cfg.keys_bad);
+}
+
+void test_blank_bssid_clears_the_whole_list() {
+  HuntConfig cfg = {};
+  TEST_ASSERT_TRUE(parse("bssid = F2:EE:CB:62:E8:77\n"
+                         "bssid = F2:1D:D5:EA:5D:16\n"
+                         "bssid =\n", cfg));
+  TEST_ASSERT_EQUAL_UINT8(0, cfg.bssid_count);
+  TEST_ASSERT_FALSE(cfg.has_bssid);
+  TEST_ASSERT_TRUE(cfg.bssid_seen);
+}
+
+// Overflow must be reported. Silently hunting a subset of the list would look
+// exactly like the extra foxes being out of range.
+void test_targets_beyond_the_limit_are_reported() {
+  HuntConfig cfg = {};
+  char text[2048] = {};
+  size_t n = 0;
+  for (int i = 0; i < HUNT_MAX_TARGETS + 2; i++) {
+    n += (size_t)snprintf(text + n, sizeof(text) - n,
+                          "bssid = F2:00:00:00:00:%02X\n", i);
+  }
+
+  TEST_ASSERT_TRUE(parse(text, cfg));
+  TEST_ASSERT_EQUAL_UINT8(HUNT_MAX_TARGETS, cfg.bssid_count);
+  TEST_ASSERT_EQUAL_UINT16(2, cfg.bssid_dropped);
+  TEST_ASSERT_EQUAL_UINT16(2, cfg.keys_bad);
+}
+
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
@@ -197,5 +248,8 @@ int main(int argc, char** argv) {
   RUN_TEST(test_final_line_without_newline_is_parsed);
   RUN_TEST(test_overlong_ssid_is_truncated_not_overflowed);
   RUN_TEST(test_band_maps_onto_the_expected_sweep_plan);
+  RUN_TEST(test_multiple_bssid_lines_accumulate_targets);
+  RUN_TEST(test_blank_bssid_clears_the_whole_list);
+  RUN_TEST(test_targets_beyond_the_limit_are_reported);
   return UNITY_END();
 }
