@@ -235,6 +235,14 @@
 #define SCAN_LOG_NORMAL_STARTS 0  // 1 enables logging of all successful scan starts.
 #endif
 
+// 1 prints the two GNSS status lines with every periodic status block. 0
+// suppresses them while there is no fix at all, which indoors is permanent:
+// three lines every five seconds of "usable=NO" buries the hunt output on a
+// phone-sized screen. A real fix still prints either way.
+#ifndef PERIODIC_STATUS_GPS_LINES
+#define PERIODIC_STATUS_GPS_LINES 1
+#endif
+
 // Log a line each time the scheduler completes a full coverage cycle. Useful
 // while wardriving, but a narrowed hunt sweep completes several times a second,
 // which buries the [HUNT] lines a hunter is actually watching for.

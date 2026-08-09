@@ -224,6 +224,14 @@ static void printPeriodicStatus(bool usable_fix, bool usable_phone_fix) {
   }
   lastStatMs = now;
   serialPrintRuntimeStatus();
+
+#if !PERIODIC_STATUS_GPS_LINES
+  // Nothing to report and nothing that will change: skip until a fix appears.
+  if (!usable_fix && !usable_phone_fix) {
+    return;
+  }
+#endif
+
   controllerGnssRuntimeSerialPrintStatus(gps, usable_fix, serialPrintfNormalized);
   serialPrintfNormalized("GPS(phone): usable=%s loc_valid=%s lat=%.7f lon=%.7f age=%lu chars=%lu\n",
                          usable_phone_fix ? "YES" : "NO",
