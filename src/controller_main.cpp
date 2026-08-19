@@ -585,6 +585,22 @@ void setup() {
 #endif
 }
 
+// Reboot into the RP2350 USB (UF2) bootloader when a host opens the Console CDC
+// at 1200 baud. `pio run -t upload` (and the Arduino IDE) perform this "1200bps
+// touch" immediately before flashing, so honoring it lets the controller be
+// flashed directly over USB -- no SD-card shuffle and no BOOTSEL button. 1200 is
+// never used for the real console, so this cannot misfire in normal operation.
+static void maybeEnterUsbBootloaderOn1200bps() {
+  cdc_line_coding_t coding = {};
+  tud_cdc_n_get_line_coding(0 /* CDC0 = Console */, &coding);
+  if (coding.bit_rate == 1200) {
+    Serial.println("1200bps touch: rebooting into UF2 bootloader for USB flashing");
+    Serial.flush();
+    delay(20);
+    rp2040.rebootToBootloader();
+  }
+}
+
 void loop() {
 #if CONTROLLER_WATCHDOG_TIMEOUT_MS > 0
   {
@@ -598,6 +614,7 @@ void loop() {
 #endif
   controllerMtpStorageTask();
   handleResetButton();
+  maybeEnterUsbBootloaderOn1200bps();
 
   // Read GNSS data, update the fix LED, and compute the current "usable fix"
   // state that drives logging and periodic status.
